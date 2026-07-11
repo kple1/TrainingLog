@@ -1,11 +1,12 @@
 """
 Notion "훈련일지" 하위의 오늘 날짜 페이지를 PDF로 변환해 이메일로 발송한다.
-cron에서 매일 22:10(KST)에 실행되는 것을 전제로 한다.
+cron에서 5~10분 간격으로 실행되며, schedule.json에 정의된 요일별 시각에만 실제로 발송한다.
 """
 from __future__ import annotations
 
 import argparse
 import io
+import json
 import logging
 import os
 import smtplib
@@ -13,7 +14,7 @@ import sys
 import time
 import traceback
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from email.message import EmailMessage
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -64,6 +65,13 @@ SENDER_DISPLAY_NAME = os.environ.get("SENDER_DISPLAY_NAME", "김현욱")
 
 OUTPUT_DIR = BASE_DIR / "output"
 LOG_DIR = BASE_DIR / "logs"
+STATE_DIR = BASE_DIR / "state"
+SCHEDULE_FILE = Path(os.environ.get("SCHEDULE_FILE", str(BASE_DIR / "schedule.json")))
+# cron이 이 간격(분)으로 실행된다고 가정하고, 목표 시각이 그 창 안에 들어오면 "지금 발송할 시각"으로 판단한다.
+CRON_INTERVAL_MINUTES = int(os.environ.get("CRON_INTERVAL_MINUTES", "5"))
+
+WEEKDAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+DEFAULT_SCHEDULE = {day: {"enabled": True, "time": "22:10"} for day in WEEKDAY_KEYS}
 
 
 # --------------------------------------------------------------------------
@@ -438,6 +446,51 @@ def send_error_alert(error_text: str) -> None:
 
 
 # --------------------------------------------------------------------------
+# 요일별 스케줄 (schedule.json)
+# --------------------------------------------------------------------------
+def load_schedule() -> dict:
+    if not SCHEDULE_FILE.exists():
+        return DEFAULT_SCHEDULE
+    try:
+        with open(SCHEDULE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        log.warning("schedule.json 파싱 실패, 기본 스케줄(매일 22:10) 사용", exc_info=True)
+        return DEFAULT_SCHEDULE
+    merged = {day: dict(cfg) for day, cfg in DEFAULT_SCHEDULE.items()}
+    for day, cfg in data.items():
+        if day in merged and isinstance(cfg, dict):
+            merged[day].update(cfg)
+    return merged
+
+
+def is_due_now(schedule: dict, now: datetime) -> tuple[bool, str]:
+    """schedule.json 기준으로 '지금'이 발송 대상 시각(±CRON_INTERVAL_MINUTES) 안에 있는지 판단한다."""
+    day_key = WEEKDAY_KEYS[now.weekday()]
+    day_cfg = schedule.get(day_key, {"enabled": False, "time": "22:10"})
+    if not day_cfg.get("enabled", True):
+        return False, f"{day_key} 발송이 schedule.json에서 비활성화(blocked)되어 있어 건너뜁니다."
+    try:
+        hh, mm = (int(x) for x in str(day_cfg.get("time", "22:10")).split(":"))
+        target = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    except Exception:
+        return False, f"{day_key} 스케줄의 time 형식이 올바르지 않습니다: {day_cfg.get('time')!r}"
+    window_end = target + timedelta(minutes=CRON_INTERVAL_MINUTES)
+    if target <= now < window_end:
+        return True, ""
+    return False, ""
+
+
+def already_sent_today(target_date: date) -> bool:
+    return (STATE_DIR / f"sent_{target_date.isoformat()}.flag").exists()
+
+
+def mark_sent_today(target_date: date) -> None:
+    STATE_DIR.mkdir(exist_ok=True)
+    (STATE_DIR / f"sent_{target_date.isoformat()}.flag").touch()
+
+
+# --------------------------------------------------------------------------
 # 메인
 # --------------------------------------------------------------------------
 @dataclass
@@ -480,17 +533,35 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="훈련일지 PDF 이메일 발송")
     parser.add_argument("--date", help="대상 날짜 YYYY-MM-DD (기본값: 오늘, KST)")
     parser.add_argument("--dry-run", action="store_true", help="PDF만 생성하고 메일은 보내지 않음")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="schedule.json의 요일별 시각/차단(blocked) 설정과 중복발송 방지를 무시하고 즉시 발송",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    now = datetime.now(KST)
     target_date = (
-        datetime.strptime(args.date, "%Y-%m-%d").date()
-        if args.date
-        else datetime.now(KST).date()
+        datetime.strptime(args.date, "%Y-%m-%d").date() if args.date else now.date()
     )
+
+    if not args.dry_run and not args.force:
+        schedule = load_schedule()
+        due, reason = is_due_now(schedule, now)
+        if not due:
+            if reason:
+                log.info(reason)
+            return
+        if already_sent_today(target_date):
+            log.info("%s 은(는) 이미 발송되어 건너뜁니다.", target_date.isoformat())
+            return
+
     run(target_date, dry_run=args.dry_run)
+    if not args.dry_run:
+        mark_sent_today(target_date)
 
 
 if __name__ == "__main__":
