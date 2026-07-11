@@ -54,17 +54,39 @@ python send_daily_report.py --dry-run --date 2026-07-09
 python send_daily_report.py
 ```
 
-## 3. 매일 22:10 자동 실행 (cron)
+## 3. 요일별 발송 시각 / 차단 설정 (schedule.json)
 
-서버 시간대를 한국시간(KST)으로 맞추거나, cron에 UTC 기준 시각(13:10 UTC)을 사용한다.
-(공유 서버라 시스템 시간대를 바꾸지 않는 게 안전할 때는 UTC 기준으로 등록한다.)
+요일마다 다른 시각에 보내거나, 특정 요일은 아예 발송을 막고(blocked) 싶을 때 `schedule.json`을 수정한다.
+cron을 다시 등록할 필요 없이 이 파일만 편집하면 바로 적용된다 (다음 5분 이내 반영).
+
+```json
+{
+  "mon": { "enabled": true,  "time": "22:10" },
+  "tue": { "enabled": true,  "time": "22:10" },
+  "sat": { "enabled": false, "time": "20:00" }
+}
+```
+- `enabled: false` = 그 요일은 발송하지 않음 (시각 값은 남겨둬도 무시된다)
+- `time`은 KST 기준 `HH:MM`
+- cron이 5분 간격으로 실행되며 설정된 시각을 지났는지 확인하는 방식이라, 실제 발송은 최대 약 5분 늦게 이루어질 수 있다
+
+### cron 등록
+
+서버 시간대와 무관하게 스크립트 내부에서 KST로 판단하므로, cron 자체는 자주(예: 5분마다) 실행되도록만 등록하면 된다.
 
 ```bash
 crontab -e
 ```
 다음 줄 추가:
 ```
-10 13 * * * cd /home/<user>/TrainingLog && /home/<user>/TrainingLog/.venv/bin/python send_daily_report.py >> /home/<user>/TrainingLog/logs/cron.log 2>&1
+*/5 * * * * cd /home/<user>/TrainingLog && /home/<user>/TrainingLog/.venv/bin/python send_daily_report.py >> /home/<user>/TrainingLog/logs/cron.log 2>&1
+```
+
+### 수동 실행 / 강제 발송
+
+```bash
+python send_daily_report.py --force              # schedule.json 무시하고 오늘자 즉시 발송
+python send_daily_report.py --force --date 2026-07-05   # 특정 날짜 재발송
 ```
 
 ## 4. 오류 처리
@@ -76,7 +98,7 @@ crontab -e
 ## 5. 실제 배포 현황
 
 - 배포 서버: 상시 켜져 있는 Ubuntu 24.04 클라우드 VM의 `~/TrainingLog`에 배치 (다른 개인 프로젝트와 같은 서버를 공유해서 쓰는 중)
-- 서버 시간대는 `Etc/UTC` 그대로 두고, cron은 `10 13 * * *`(UTC 13:10 = KST 22:10)로 등록했다
+- 서버 시간대는 `Etc/UTC` 그대로 두고, cron은 `*/5 * * * *`(5분마다)로 등록해 `schedule.json`의 요일별 시각(KST)을 스크립트가 직접 판단한다
 - 한글 폰트는 `fonts-nanum` 패키지의 `NanumBarunGothic`을 사용한다 (Noto Sans CJK의 .ttc는 OpenType/CFF 윤곽선이라 reportlab에서 열리지 않아 제외함)
 - 코드 수정 후 재배포:
   ```bash
