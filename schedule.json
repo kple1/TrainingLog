@@ -4,6 +4,6 @@
   "wed": { "enabled": true, "time": "22:10" },
   "thu": { "enabled": true, "time": "22:10" },
   "fri": { "enabled": true, "time": "22:10" },
-  "sat": { "enabled": true, "time": "22:10" },
-  "sun": { "enabled": true, "time": "22:10" }
+  "sat": { "enabled": true, "time": "18:10" },
+  "sun": { "enabled": false, "time": "22:10" }
 }
