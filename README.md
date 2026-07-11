@@ -57,34 +57,29 @@ python send_daily_report.py
 ## 3. 매일 22:10 자동 실행 (cron)
 
 서버 시간대를 한국시간(KST)으로 맞추거나, cron에 UTC 기준 시각(13:10 UTC)을 사용한다.
+(공유 서버라 시스템 시간대를 바꾸지 않는 게 안전할 때는 UTC 기준으로 등록한다.)
 
 ```bash
-timedatectl set-timezone Asia/Seoul   # 서버 시간대를 KST로 변경(권장)
 crontab -e
 ```
 다음 줄 추가:
 ```
-10 22 * * * cd /home/ubuntu/TrainingLog && /home/ubuntu/TrainingLog/.venv/bin/python send_daily_report.py >> logs/cron.log 2>&1
+10 13 * * * cd /home/<user>/TrainingLog && /home/<user>/TrainingLog/.venv/bin/python send_daily_report.py >> /home/<user>/TrainingLog/logs/cron.log 2>&1
 ```
 
 ## 4. 오류 처리
 
 - 당일 날짜의 하위 페이지를 찾지 못하거나, Notion/Gmail 오류가 발생하면 `studyhyunuk@gmail.com` 앞으로
   `[훈련일지 자동발송 오류]` 제목의 알림 메일이 자동 발송된다.
-- 실행 로그는 `logs/app.log` 에 누적 기록된다 (최대 1MB x 3개 롤링).
+- 실행 로그는 `logs/app.log` 에 누적 기록된다 (최대 1MB x 3개 롤링). cron 실행 자체의 표준출력/에러는 `logs/cron.log`에 쌓인다.
 
-## 5. Oracle Cloud (OCI) Always Free VM에 배포하기
+## 5. 실제 배포 현황
 
-PC가 꺼져 있어도 매일 정확한 시각에 실행되도록, 상시 켜져 있는 Oracle Cloud 무료 VM에 배포하는 것을 권장한다.
-
-1. https://cloud.oracle.com 에서 계정 생성 (신용카드 인증 필요, 무료 티어는 과금되지 않음) — 본인이 직접 진행
-2. 콘솔 → Compute → Instances → **Create Instance**
-   - Image: **Canonical Ubuntu 22.04** (Always Free 대상)
-   - Shape: **VM.Standard.E2.1.Micro** 또는 Ampere A1 (Always Free eligible로 표시된 것 선택)
-   - Add SSH keys: 본인 PC의 공개키(`~/.ssh/id_ed25519.pub` 등)를 업로드하거나 새로 생성
-3. 생성 후 인스턴스의 **Public IP**를 확인
-4. VCN(가상 네트워크) → Security List에서 필요하면 22번 포트(SSH)가 열려 있는지 확인 (기본값으로 보통 열려 있음)
-5. 아래 정보를 알려주면 이어서 배포를 진행한다:
-   - Public IP
-   - SSH 사용자명 (Ubuntu 이미지는 보통 `ubuntu`)
-   - 접속에 사용할 SSH 키 (기존에 만들어둔 키를 그대로 써도 되고, 새로 만들어도 된다)
+- 배포 서버: Google Cloud VM (`34.158.213.95`, Ubuntu 24.04), 기존에 다른 프로젝트(LexiFlow)와 함께 사용 중인 서버의 `~/TrainingLog`에 배치
+- 서버 시간대는 `Etc/UTC` 그대로 두고, cron은 `10 13 * * *`(UTC 13:10 = KST 22:10)로 등록했다
+- 한글 폰트는 `fonts-nanum` 패키지의 `NanumBarunGothic`을 사용한다 (Noto Sans CJK의 .ttc는 OpenType/CFF 윤곽선이라 reportlab에서 열리지 않아 제외함)
+- 코드 수정 후 재배포:
+  ```bash
+  scp send_daily_report.py studyhyunuk@34.158.213.95:~/TrainingLog/
+  ssh studyhyunuk@34.158.213.95 "cd ~/TrainingLog && .venv/bin/python send_daily_report.py --dry-run"
+  ```

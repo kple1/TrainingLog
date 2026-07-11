@@ -170,41 +170,50 @@ def find_daily_page(parent_id: str, target_date: date) -> tuple[str, str] | None
 # --------------------------------------------------------------------------
 # 폰트 / 스타일
 # --------------------------------------------------------------------------
+# (regular, bold, subfontIndex)
+# 참고: Noto Sans CJK(.ttc)는 OpenType/CFF 윤곽선이라 reportlab이 열지 못해 후보에서 제외했다.
+# NanumBarunGothic은 fonts-nanum 패키지에 포함된, NanumGothic보다 각지고 문서용으로 무난한 서체.
 FONT_CANDIDATES = [
-    ("/usr/share/fonts/truetype/nanum/NanumGothic.ttf", "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf"),
-    ("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc", "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc"),
-    ("C:/Windows/Fonts/malgun.ttf", "C:/Windows/Fonts/malgunbd.ttf"),
+    ("/usr/share/fonts/truetype/nanum/NanumBarunGothic.ttf", "/usr/share/fonts/truetype/nanum/NanumBarunGothicBold.ttf", None),
+    ("/usr/share/fonts/truetype/nanum/NanumGothic.ttf", "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf", None),
+    ("C:/Windows/Fonts/malgun.ttf", "C:/Windows/Fonts/malgunbd.ttf", None),
 ]
 
 
 def register_fonts() -> None:
     regular_env = os.environ.get("FONT_REGULAR")
     bold_env = os.environ.get("FONT_BOLD")
-    candidates = ([(regular_env, bold_env)] if regular_env else []) + FONT_CANDIDATES
-    for regular, bold in candidates:
-        if regular and Path(regular).exists():
-            pdfmetrics.registerFont(TTFont("Korean", regular))
-            bold_path = bold if (bold and Path(bold).exists()) else regular
-            pdfmetrics.registerFont(TTFont("Korean-Bold", bold_path))
-            log.info("폰트 등록: %s / %s", regular, bold_path)
-            return
+    candidates = ([(regular_env, bold_env, None)] if regular_env else []) + FONT_CANDIDATES
+    for regular, bold, subfont_index in candidates:
+        if not (regular and Path(regular).exists()):
+            continue
+        bold_path = bold if (bold and Path(bold).exists()) else regular
+        try:
+            kwargs = {"subfontIndex": subfont_index} if subfont_index is not None else {}
+            pdfmetrics.registerFont(TTFont("Korean", regular, **kwargs))
+            pdfmetrics.registerFont(TTFont("Korean-Bold", bold_path, **kwargs))
+        except Exception:
+            log.warning("폰트 등록 실패, 다음 후보로 넘어갑니다: %s", regular, exc_info=True)
+            continue
+        log.info("폰트 등록: %s / %s (subfontIndex=%s)", regular, bold_path, subfont_index)
+        return
     raise RuntimeError(
-        "한글 폰트를 찾지 못했습니다. Ubuntu는 `sudo apt install fonts-nanum` 후 재시도하세요."
+        "한글 폰트를 찾지 못했습니다. Ubuntu는 `sudo apt install fonts-noto-cjk` 후 재시도하세요."
     )
 
 
 def build_styles() -> dict[str, ParagraphStyle]:
     return {
-        "h1": ParagraphStyle("KH1", fontName="Korean-Bold", fontSize=18, leading=24, spaceAfter=4),
-        "h2_sub": ParagraphStyle("KH2Sub", fontName="Korean", fontSize=12, leading=16, spaceAfter=12, textColor=colors.grey),
-        "h2": ParagraphStyle("KH2", fontName="Korean-Bold", fontSize=14, leading=20, spaceBefore=14, spaceAfter=6),
-        "h3": ParagraphStyle("KH3", fontName="Korean-Bold", fontSize=12, leading=18, spaceBefore=10, spaceAfter=4),
-        "base": ParagraphStyle("KBase", fontName="Korean", fontSize=10, leading=15),
-        "bullet": ParagraphStyle("KBullet", fontName="Korean", fontSize=10, leading=15, leftIndent=14),
-        "quote": ParagraphStyle("KQuote", fontName="Korean", fontSize=10, leading=15, leftIndent=14, textColor=colors.grey),
-        "cell": ParagraphStyle("KCell", fontName="Korean", fontSize=9, leading=13),
-        "cell_bold": ParagraphStyle("KCellBold", fontName="Korean-Bold", fontSize=9, leading=13),
-        "code": ParagraphStyle("KCode", fontName="Courier", fontSize=8, leading=12, backColor=colors.whitesmoke, leftIndent=8),
+        "h1": ParagraphStyle("KH1", fontName="Korean-Bold", fontSize=20, leading=26, spaceAfter=4),
+        "h2_sub": ParagraphStyle("KH2Sub", fontName="Korean", fontSize=13, leading=18, spaceAfter=14, textColor=colors.grey),
+        "h2": ParagraphStyle("KH2", fontName="Korean-Bold", fontSize=15, leading=21, spaceBefore=16, spaceAfter=8),
+        "h3": ParagraphStyle("KH3", fontName="Korean-Bold", fontSize=13, leading=19, spaceBefore=12, spaceAfter=5),
+        "base": ParagraphStyle("KBase", fontName="Korean", fontSize=11, leading=17),
+        "bullet": ParagraphStyle("KBullet", fontName="Korean", fontSize=11, leading=17, leftIndent=14),
+        "quote": ParagraphStyle("KQuote", fontName="Korean", fontSize=11, leading=17, leftIndent=14, textColor=colors.grey),
+        "cell": ParagraphStyle("KCell", fontName="Korean", fontSize=10.5, leading=15),
+        "cell_bold": ParagraphStyle("KCellBold", fontName="Korean-Bold", fontSize=10.5, leading=15),
+        "code": ParagraphStyle("KCode", fontName="Courier", fontSize=9, leading=13, backColor=colors.whitesmoke, leftIndent=8),
     }
 
 
@@ -269,6 +278,7 @@ def build_table_flowable(table_block: dict, styles: dict, max_width: float) -> T
     has_col_header = table_block["table"].get("has_column_header", False)
     has_row_header = table_block["table"].get("has_row_header", False)
     data = []
+    col_weight: list[int] = []
     for r_idx, row in enumerate(rows):
         cells = row["table_row"]["cells"]
         row_data = []
@@ -276,12 +286,23 @@ def build_table_flowable(table_block: dict, styles: dict, max_width: float) -> T
             is_header = (r_idx == 0 and has_col_header) or (c_idx == 0 and has_row_header)
             style = styles["cell_bold"] if is_header else styles["cell"]
             row_data.append(Paragraph(rich_text_markup(cell), style))
+            # 셀 내 가장 긴 줄의 길이를 기준으로 컬럼별 비중을 잡는다 (긴 줄바꿈 텍스트가 폭을 과도하게 넓히지 않도록).
+            cell_text = "".join(rt.get("plain_text", "") for rt in cell)
+            longest_line = max((len(line) for line in cell_text.split("\n")), default=1) or 1
+            if c_idx >= len(col_weight):
+                col_weight.append(longest_line)
+            else:
+                col_weight[c_idx] = max(col_weight[c_idx], longest_line)
         data.append(row_data)
     if not data:
         return None
     col_count = len(data[0])
-    col_width = max_width / col_count
-    table = Table(data, colWidths=[col_width] * col_count)
+    min_width = 20 * mm
+    total_weight = sum(col_weight) or col_count
+    raw_widths = [max(min_width, max_width * (w / total_weight)) for w in col_weight]
+    scale = max_width / sum(raw_widths)
+    col_widths = [w * scale for w in raw_widths]
+    table = Table(data, colWidths=col_widths)
     style_cmds = [
         ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
