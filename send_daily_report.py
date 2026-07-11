@@ -60,7 +60,7 @@ NOTION_PARENT_PAGE_ID = os.environ.get(
 )
 GMAIL_ADDRESS = os.environ.get("GMAIL_ADDRESS", "studyhyunuk@gmail.com")
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
-RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL", "it.sanghun.yoo@gmail.com")
+RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL", "shun.yoo@samsung.com")
 SENDER_DISPLAY_NAME = os.environ.get("SENDER_DISPLAY_NAME", "김현욱")
 
 OUTPUT_DIR = BASE_DIR / "output"
