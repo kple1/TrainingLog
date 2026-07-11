@@ -75,11 +75,12 @@ crontab -e
 
 ## 5. 실제 배포 현황
 
-- 배포 서버: Google Cloud VM (`34.158.213.95`, Ubuntu 24.04), 기존에 다른 프로젝트(LexiFlow)와 함께 사용 중인 서버의 `~/TrainingLog`에 배치
+- 배포 서버: 상시 켜져 있는 Ubuntu 24.04 클라우드 VM의 `~/TrainingLog`에 배치 (다른 개인 프로젝트와 같은 서버를 공유해서 쓰는 중)
 - 서버 시간대는 `Etc/UTC` 그대로 두고, cron은 `10 13 * * *`(UTC 13:10 = KST 22:10)로 등록했다
 - 한글 폰트는 `fonts-nanum` 패키지의 `NanumBarunGothic`을 사용한다 (Noto Sans CJK의 .ttc는 OpenType/CFF 윤곽선이라 reportlab에서 열리지 않아 제외함)
 - 코드 수정 후 재배포:
   ```bash
-  scp send_daily_report.py studyhyunuk@34.158.213.95:~/TrainingLog/
-  ssh studyhyunuk@34.158.213.95 "cd ~/TrainingLog && .venv/bin/python send_daily_report.py --dry-run"
+  scp send_daily_report.py <user>@<host>:~/TrainingLog/
+  ssh <user>@<host> "cd ~/TrainingLog && .venv/bin/python send_daily_report.py --dry-run"
   ```
+  (실제 접속 정보는 로컬 SSH 설정을 참고)
