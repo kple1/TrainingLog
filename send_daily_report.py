@@ -58,10 +58,10 @@ NOTION_TOKEN = require_env("NOTION_TOKEN")
 NOTION_PARENT_PAGE_ID = os.environ.get(
     "NOTION_PARENT_PAGE_ID", "2fb21ce8524480c8a52cc4e003e2dcdd"
 )
-GMAIL_ADDRESS = os.environ.get("GMAIL_ADDRESS", "studyhyunuk@gmail.com")
+GMAIL_ADDRESS = require_env("GMAIL_ADDRESS")
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
-RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL", "shun.yoo@samsung.com")
-SENDER_DISPLAY_NAME = os.environ.get("SENDER_DISPLAY_NAME", "김현욱")
+RECIPIENT_EMAIL = require_env("RECIPIENT_EMAIL")
+SENDER_DISPLAY_NAME = require_env("SENDER_DISPLAY_NAME")
 
 OUTPUT_DIR = BASE_DIR / "output"
 LOG_DIR = BASE_DIR / "logs"
