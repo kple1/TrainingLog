@@ -221,7 +221,9 @@ def build_styles() -> dict[str, ParagraphStyle]:
         "quote": ParagraphStyle("KQuote", fontName="Korean", fontSize=11, leading=17, leftIndent=14, textColor=colors.grey),
         "cell": ParagraphStyle("KCell", fontName="Korean", fontSize=10.5, leading=15),
         "cell_bold": ParagraphStyle("KCellBold", fontName="Korean-Bold", fontSize=10.5, leading=15),
-        "code": ParagraphStyle("KCode", fontName="Courier", fontSize=9, leading=13, backColor=colors.whitesmoke, leftIndent=8),
+        # 코드 블록에 한글 주석이 섞이는 경우가 많아 고정폭 Courier 대신 한글 폰트를 사용한다
+        # (Courier는 한글 글리프가 없어 네모(tofu)로 깨짐).
+        "code": ParagraphStyle("KCode", fontName="Korean", fontSize=9, leading=13, backColor=colors.whitesmoke, leftIndent=8),
     }
 
 
@@ -248,7 +250,7 @@ def rich_text_markup(rich_text_list: list[dict]) -> str:
             continue
         ann = rt.get("annotations", {})
         if ann.get("code"):
-            text = f'<font face="Courier">{text}</font>'
+            text = f'<font face="Korean">{text}</font>'
         if ann.get("bold"):
             text = f"<b>{text}</b>"
         if ann.get("italic"):
@@ -368,8 +370,9 @@ def blocks_to_flowables(blocks: list[dict], styles: dict, max_width: float, leve
             text = rich_text_markup(data.get("rich_text"))
             flow.append(Paragraph(f"{emoji} {text}", indented(styles["quote"], level)))
         elif btype == "code":
-            text = "".join(rt.get("plain_text", "") for rt in data.get("rich_text", [])).replace("\n", "<br/>")
-            flow.append(Paragraph(esc(text), indented(styles["code"], level)))
+            raw_text = "".join(rt.get("plain_text", "") for rt in data.get("rich_text", []))
+            text = esc(raw_text).replace("\n", "<br/>")
+            flow.append(Paragraph(text, indented(styles["code"], level)))
         elif btype == "image":
             img = build_image_flowable(data, max_width - level * 12)
             if img:
