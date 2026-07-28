@@ -376,7 +376,7 @@ def blocks_to_flowables(blocks: list[dict], styles: dict, max_width: float, leve
             flow.append(Paragraph(rich_text_markup(data.get("rich_text")), indented(styles["h2"], level)))
         elif btype == "heading_2":
             flow.append(Paragraph(rich_text_markup(data.get("rich_text")), indented(styles["h2"], level)))
-        elif btype == "heading_3":
+        elif btype in ("heading_3", "heading_4", "heading_5", "heading_6"):
             flow.append(Paragraph(rich_text_markup(data.get("rich_text")), indented(styles["h3"], level)))
         elif btype == "divider":
             flow.append(HRFlowable(width="100%", thickness=0.5, color=colors.grey, spaceBefore=4, spaceAfter=8))
@@ -422,10 +422,10 @@ def blocks_to_flowables(blocks: list[dict], styles: dict, max_width: float, leve
             flow.append(Paragraph(f"[하위 페이지: {esc(data.get('title', ''))}]", indented(styles["base"], level)))
         elif btype in ("column_list", "column", "synced_block"):
             pass
-        else:
-            text = "".join(rt.get("plain_text", "") for rt in data.get("rich_text", []) if isinstance(data, dict))
+        elif isinstance(data, dict) and data.get("rich_text"):
+            text = rich_text_markup(data.get("rich_text"))
             if text:
-                flow.append(Paragraph(esc(text), indented(styles["base"], level)))
+                flow.append(Paragraph(text, indented(styles["base"], level)))
 
         if block.get("has_children") and btype not in ("table", "child_page"):
             children = list_children(block["id"])
