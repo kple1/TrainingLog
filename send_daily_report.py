@@ -200,6 +200,11 @@ def register_fonts() -> None:
             kwargs = {"subfontIndex": subfont_index} if subfont_index is not None else {}
             pdfmetrics.registerFont(TTFont("Korean", regular, **kwargs))
             pdfmetrics.registerFont(TTFont("Korean-Bold", bold_path, **kwargs))
+            # <b>/<i> 태그가 커스텀 TTF에서 동작하려면 폰트 패밀리 등록이 필요하다.
+            # 별도의 이탤릭 한글 서체는 없어서 이탤릭은 일반체로 대체한다 (깨지는 것보다 낫다).
+            pdfmetrics.registerFontFamily(
+                "Korean", normal="Korean", bold="Korean-Bold", italic="Korean", boldItalic="Korean-Bold"
+            )
         except Exception:
             log.warning("폰트 등록 실패, 다음 후보로 넘어갑니다: %s", regular, exc_info=True)
             continue
@@ -212,8 +217,10 @@ def register_fonts() -> None:
 
 def build_styles() -> dict[str, ParagraphStyle]:
     return {
-        "h1": ParagraphStyle("KH1", fontName="Korean-Bold", fontSize=20, leading=26, spaceAfter=4),
-        "h2_sub": ParagraphStyle("KH2Sub", fontName="Korean", fontSize=13, leading=18, spaceAfter=14, textColor=colors.grey),
+        # Notion 원본 제목은 "2026. 07. 25.<br>훈련일지 141일차"처럼 한 제목이 줄바꿈된 것뿐이라
+        # 두 줄 모두 같은 제목 크기/굵기로 표시한다 (작은 회색 부제목처럼 보이면 안 됨).
+        "h1": ParagraphStyle("KH1", fontName="Korean-Bold", fontSize=20, leading=26, spaceAfter=2),
+        "h1_line2": ParagraphStyle("KH1Line2", fontName="Korean-Bold", fontSize=20, leading=26, spaceAfter=16),
         "h2": ParagraphStyle("KH2", fontName="Korean-Bold", fontSize=15, leading=21, spaceBefore=16, spaceAfter=8),
         "h3": ParagraphStyle("KH3", fontName="Korean-Bold", fontSize=13, leading=19, spaceBefore=12, spaceAfter=5),
         "base": ParagraphStyle("KBase", fontName="Korean", fontSize=11, leading=17),
@@ -242,6 +249,30 @@ def esc(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+def _code_line_markup(line: str) -> str:
+    """코드 블록 한 줄의 선행 공백/탭을 보존한다.
+    Paragraph는 HTML처럼 연속 공백을 한 칸으로 줄이므로, 들여쓰기는 &nbsp;로 바꿔줘야 유지된다."""
+    stripped = line.lstrip(" \t")
+    leading = line[: len(line) - len(stripped)]
+    indent_markup = leading.replace("\t", "&nbsp;" * 4).replace(" ", "&nbsp;")
+    return indent_markup + esc(stripped)
+
+
+# Notion 텍스트 색상 -> 근사 hex (배경색 계열은 같은 색의 글자색으로 대체한다;
+# reportlab의 미니 마크업으로는 인라인 하이라이트 배경을 안전하게 표현하기 어렵다).
+NOTION_COLOR_MAP = {
+    "gray": "#787774",
+    "brown": "#976D57",
+    "orange": "#CC782F",
+    "yellow": "#C29343",
+    "green": "#548164",
+    "blue": "#487CA5",
+    "purple": "#8A5A83",
+    "pink": "#B54C6D",
+    "red": "#C4554D",
+}
+
+
 def rich_text_markup(rich_text_list: list[dict]) -> str:
     parts = []
     for rt in rich_text_list or []:
@@ -257,6 +288,11 @@ def rich_text_markup(rich_text_list: list[dict]) -> str:
             text = f"<i>{text}</i>"
         if ann.get("strikethrough"):
             text = f"<strike>{text}</strike>"
+        color_name = ann.get("color", "default")
+        if color_name and color_name != "default":
+            hex_color = NOTION_COLOR_MAP.get(color_name.replace("_background", ""))
+            if hex_color:
+                text = f'<font color="{hex_color}">{text}</font>'
         href = rt.get("href")
         if href:
             text = f'<link href="{esc(href)}"><u>{text}</u></link>'
@@ -340,7 +376,7 @@ def blocks_to_flowables(blocks: list[dict], styles: dict, max_width: float, leve
             flow.append(Paragraph(rich_text_markup(data.get("rich_text")), indented(styles["h2"], level)))
         elif btype == "heading_2":
             flow.append(Paragraph(rich_text_markup(data.get("rich_text")), indented(styles["h2"], level)))
-        elif btype == "heading_3":
+        elif btype in ("heading_3", "heading_4", "heading_5", "heading_6"):
             flow.append(Paragraph(rich_text_markup(data.get("rich_text")), indented(styles["h3"], level)))
         elif btype == "divider":
             flow.append(HRFlowable(width="100%", thickness=0.5, color=colors.grey, spaceBefore=4, spaceAfter=8))
@@ -371,7 +407,7 @@ def blocks_to_flowables(blocks: list[dict], styles: dict, max_width: float, leve
             flow.append(Paragraph(f"{emoji} {text}", indented(styles["quote"], level)))
         elif btype == "code":
             raw_text = "".join(rt.get("plain_text", "") for rt in data.get("rich_text", []))
-            text = esc(raw_text).replace("\n", "<br/>")
+            text = "<br/>".join(_code_line_markup(line) for line in raw_text.split("\n"))
             flow.append(Paragraph(text, indented(styles["code"], level)))
         elif btype == "image":
             img = build_image_flowable(data, max_width - level * 12)
@@ -386,10 +422,10 @@ def blocks_to_flowables(blocks: list[dict], styles: dict, max_width: float, leve
             flow.append(Paragraph(f"[하위 페이지: {esc(data.get('title', ''))}]", indented(styles["base"], level)))
         elif btype in ("column_list", "column", "synced_block"):
             pass
-        else:
-            text = "".join(rt.get("plain_text", "") for rt in data.get("rich_text", []) if isinstance(data, dict))
+        elif isinstance(data, dict) and data.get("rich_text"):
+            text = rich_text_markup(data.get("rich_text"))
             if text:
-                flow.append(Paragraph(esc(text), indented(styles["base"], level)))
+                flow.append(Paragraph(text, indented(styles["base"], level)))
 
         if block.get("has_children") and btype not in ("table", "child_page"):
             children = list_children(block["id"])
@@ -411,7 +447,7 @@ def build_pdf(date_line: str, title_line: str, blocks: list[dict], out_path: Pat
     max_width = doc.width
     story = [
         Paragraph(esc(date_line), styles["h1"]),
-        Paragraph(esc(title_line), styles["h2_sub"]),
+        Paragraph(esc(title_line), styles["h1_line2"]),
     ]
     story.extend(blocks_to_flowables(blocks, styles, max_width))
     doc.build(story)
