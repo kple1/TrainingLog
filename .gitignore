@@ -4,5 +4,7 @@ __pycache__/
 output/
 logs/
 state/
+dist/
+fonts/
 .venv/
 venv/
