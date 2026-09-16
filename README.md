@@ -94,7 +94,66 @@ python send_daily_report.py --force --date 2026-07-05   # 특정 날짜 재발�
   `[훈련일지 자동발송 오류]` 제목의 알림 메일이 자동 발송된다.
 - 실행 로그는 `logs/app.log` 에 누적 기록된다 (최대 1MB x 3개 롤링). cron 실행 자체의 표준출력/에러는 `logs/cron.log`에 쌓인다.
 
-## 5. 실제 배포 현황
+## 5. AWS Lambda + EventBridge 배포
+
+서버를 24시간 켜두지 않고 발송 시각에만 실행되게 하는 구성. 하루 몇 초만 쓰므로 Lambda 프리티어 안에서 사실상 무료다.
+이 구성에서는 **발송 시각/요일을 EventBridge가 관리**하므로 `schedule.json`은 사용하지 않는다.
+
+### 1) 배포 zip 만들기
+
+Lambda 런타임과 같은 Linux x86_64 머신에서 빌드해야 한다 (wheel 호환성).
+
+```bash
+sudo apt install -y fonts-nanum zip
+bash scripts/build_lambda_package.sh
+# -> dist/traininglog-lambda.zip (약 14MB)
+```
+코드 + 의존성 + 한글 폰트(NanumBarunGothic)가 모두 들어 있어 Lambda에 시스템 폰트가 없어도 동작한다.
+
+### 2) Lambda 함수 생성 (콘솔)
+
+| 항목 | 값 |
+| --- | --- |
+| 런타임 | Python 3.12 |
+| 아키텍처 | x86_64 |
+| 핸들러 | `send_daily_report.lambda_handler` |
+| 제한 시간 | 60초 (기본 3초로는 부족) |
+| 메모리 | 512MB |
+| VPC | **연결하지 않음** (Notion API·SMTP 아웃바운드가 필요한데, VPC에 넣으면 NAT 게이트웨이 비용이 발생한다) |
+
+코드는 `dist/traininglog-lambda.zip`을 업로드한다.
+
+환경 변수(구성 → 환경 변수)에 `.env`와 같은 값을 넣는다:
+`NOTION_TOKEN`, `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD`, `RECIPIENT_EMAIL`, `SENDER_DISPLAY_NAME`
+
+### 3) EventBridge Scheduler로 발송 시각 등록
+
+EventBridge **Scheduler**를 쓴다 (기존 EventBridge 규칙은 UTC만 지원하지만, Scheduler는 타임존을 직접 지정할 수 있다).
+타임존은 `Asia/Seoul`, 대상은 위 Lambda 함수로 지정한다.
+
+| 요일 | cron 식 |
+| --- | --- |
+| 월~금 22:10 | `cron(10 22 ? * MON-FRI *)` |
+| 토 18:10 | `cron(10 18 ? * SAT *)` |
+
+일요일처럼 보내지 않을 요일은 **스케줄을 만들지 않으면** 된다. 시각을 바꾸려면 해당 스케줄의 cron 식을 수정한다.
+
+### 4) 테스트 / 수동 재발송
+
+Lambda 콘솔의 테스트 이벤트에 아래 JSON을 넣어 호출한다.
+
+```json
+{}                              // 오늘자 발송
+{"dry_run": true}               // PDF만 생성하고 메일은 보내지 않음
+{"date": "2026-07-28"}          // 특정 날짜 재발송
+```
+
+실행 로그는 CloudWatch Logs에 남고, 오류가 나면 기존과 동일하게 `GMAIL_ADDRESS` 앞으로 알림 메일이 간다.
+
+> **주의**: 기존 서버의 cron과 Lambda가 동시에 돌면 같은 날 메일이 두 번 간다.
+> Lambda 발송이 확인되면 기존 서버에서 `crontab -e`로 해당 줄을 지운다.
+
+## 6. 실제 배포 현황
 
 - 배포 서버: 상시 켜져 있는 Ubuntu 24.04 클라우드 VM의 `~/TrainingLog`에 배치 (다른 개인 프로젝트와 같은 서버를 공유해서 쓰는 중)
 - 서버 시간대는 `Etc/UTC` 그대로 두고, cron은 `*/5 * * * *`(5분마다)로 등록해 `schedule.json`의 요일별 시각(KST)을 스크립트가 직접 판단한다

@@ -63,9 +63,13 @@ GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
 RECIPIENT_EMAIL = require_env("RECIPIENT_EMAIL")
 SENDER_DISPLAY_NAME = require_env("SENDER_DISPLAY_NAME")
 
-OUTPUT_DIR = BASE_DIR / "output"
-LOG_DIR = BASE_DIR / "logs"
-STATE_DIR = BASE_DIR / "state"
+# Lambda에서는 코드 디렉터리(/var/task)가 읽기 전용이라 쓰기는 /tmp에만 가능하다.
+IS_LAMBDA = bool(os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
+WRITABLE_BASE = Path("/tmp") if IS_LAMBDA else BASE_DIR
+
+OUTPUT_DIR = WRITABLE_BASE / "output"
+LOG_DIR = WRITABLE_BASE / "logs"
+STATE_DIR = WRITABLE_BASE / "state"
 SCHEDULE_FILE = Path(os.environ.get("SCHEDULE_FILE", str(BASE_DIR / "schedule.json")))
 # cron이 이 간격(분)으로 실행된다고 가정하고, 목표 시각이 그 창 안에 들어오면 "지금 발송할 시각"으로 판단한다.
 CRON_INTERVAL_MINUTES = int(os.environ.get("CRON_INTERVAL_MINUTES", "5"))
@@ -78,16 +82,18 @@ DEFAULT_SCHEDULE = {day: {"enabled": True, "time": "22:10"} for day in WEEKDAY_K
 # 로깅
 # --------------------------------------------------------------------------
 def setup_logging() -> logging.Logger:
-    LOG_DIR.mkdir(exist_ok=True)
     logger = logging.getLogger("training_log_mailer")
     logger.setLevel(logging.INFO)
     fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
 
-    file_handler = RotatingFileHandler(
-        LOG_DIR / "app.log", maxBytes=1_000_000, backupCount=3, encoding="utf-8"
-    )
-    file_handler.setFormatter(fmt)
-    logger.addHandler(file_handler)
+    # Lambda는 stdout이 그대로 CloudWatch Logs로 가고 /tmp는 호출 간 보존되지 않으므로 파일 로깅을 하지 않는다.
+    if not IS_LAMBDA:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        file_handler = RotatingFileHandler(
+            LOG_DIR / "app.log", maxBytes=1_000_000, backupCount=3, encoding="utf-8"
+        )
+        file_handler.setFormatter(fmt)
+        logger.addHandler(file_handler)
 
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(fmt)
@@ -181,7 +187,10 @@ def find_daily_page(parent_id: str, target_date: date) -> tuple[str, str] | None
 # (regular, bold, subfontIndex)
 # 참고: Noto Sans CJK(.ttc)는 OpenType/CFF 윤곽선이라 reportlab이 열지 못해 후보에서 제외했다.
 # NanumBarunGothic은 fonts-nanum 패키지에 포함된, NanumGothic보다 각지고 문서용으로 무난한 서체.
+_BUNDLED_FONT_DIR = BASE_DIR / "fonts"
 FONT_CANDIDATES = [
+    # 배포 패키지에 동봉된 폰트 (Lambda처럼 시스템 폰트가 없는 환경용). 없으면 아래 시스템 경로로 넘어간다.
+    (str(_BUNDLED_FONT_DIR / "NanumBarunGothic.ttf"), str(_BUNDLED_FONT_DIR / "NanumBarunGothicBold.ttf"), None),
     ("/usr/share/fonts/truetype/nanum/NanumBarunGothic.ttf", "/usr/share/fonts/truetype/nanum/NanumBarunGothicBold.ttf", None),
     ("/usr/share/fonts/truetype/nanum/NanumGothic.ttf", "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf", None),
     ("C:/Windows/Fonts/malgun.ttf", "C:/Windows/Fonts/malgunbd.ttf", None),
@@ -525,7 +534,7 @@ def already_sent_today(target_date: date) -> bool:
 
 
 def mark_sent_today(target_date: date) -> None:
-    STATE_DIR.mkdir(exist_ok=True)
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
     (STATE_DIR / f"sent_{target_date.isoformat()}.flag").touch()
 
 
@@ -552,7 +561,7 @@ def run(target_date: date, dry_run: bool) -> RunResult:
     date_line = f"{target_date.year}. {target_date.month:02d}. {target_date.day:02d}."
     attachment_name = f"{date_str} {day_label}.pdf"
 
-    OUTPUT_DIR.mkdir(exist_ok=True)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     pdf_path = OUTPUT_DIR / attachment_name
     build_pdf(date_line, day_label, blocks, pdf_path)
     log.info("PDF 생성 완료: %s", pdf_path)
@@ -566,6 +575,43 @@ def run(target_date: date, dry_run: bool) -> RunResult:
         log.info("이메일 발송 완료: %s -> %s", GMAIL_ADDRESS, RECIPIENT_EMAIL)
 
     return RunResult(pdf_path=pdf_path, subject=subject, attachment_name=attachment_name)
+
+
+def lambda_handler(event, context):
+    """AWS Lambda 진입점.
+
+    발송 시각은 EventBridge Scheduler가 관리하므로 schedule.json은 보지 않고,
+    호출되면 곧바로 발송한다 (CLI의 --force와 같은 동작).
+
+    event 예시:
+      {}                        -> 오늘(KST) 훈련일지 발송
+      {"date": "2026-09-16"}    -> 특정 날짜 재발송
+      {"dry_run": true}         -> PDF 생성까지만 하고 메일은 보내지 않음
+    """
+    event = event or {}
+    target_date = (
+        datetime.strptime(event["date"], "%Y-%m-%d").date()
+        if event.get("date")
+        else datetime.now(KST).date()
+    )
+    dry_run = bool(event.get("dry_run"))
+
+    try:
+        result = run(target_date, dry_run=dry_run)
+    except Exception:
+        log.exception("훈련일지 발송 실패")
+        try:
+            send_error_alert(traceback.format_exc())
+        except Exception:
+            log.exception("에러 알림 메일 발송도 실패")
+        raise  # Lambda 호출을 실패로 기록해 CloudWatch에서 알람을 걸 수 있게 한다
+
+    return {
+        "date": target_date.isoformat(),
+        "subject": result.subject,
+        "attachment": result.attachment_name,
+        "dry_run": dry_run,
+    }
 
 
 def parse_args() -> argparse.Namespace:
