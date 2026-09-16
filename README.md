@@ -105,16 +105,19 @@ Lambda 런타임과 같은 Linux x86_64 머신에서 빌드해야 한다 (wheel 
 
 ```bash
 sudo apt install -y fonts-nanum zip
-bash scripts/build_lambda_package.sh
+PY_VERSION=3.14 bash scripts/build_lambda_package.sh
 # -> dist/traininglog-lambda.zip (약 14MB)
 ```
+
+> `PY_VERSION`은 **Lambda 함수에 설정한 런타임과 반드시 같아야 한다.** Pillow 같은 바이너리 의존성이
+> `cp312`, `cp314`처럼 파이썬 버전 태그로 고정돼 들어가기 때문에, 버전이 어긋나면 임포트 단계에서 실패한다.
 코드 + 의존성 + 한글 폰트(NanumBarunGothic)가 모두 들어 있어 Lambda에 시스템 폰트가 없어도 동작한다.
 
 ### 2) Lambda 함수 생성 (콘솔)
 
 | 항목 | 값 |
 | --- | --- |
-| 런타임 | Python 3.12 |
+| 런타임 | Python 3.14 (빌드 시 `PY_VERSION`과 일치시킬 것) |
 | 아키텍처 | x86_64 |
 | 핸들러 | `send_daily_report.lambda_handler` |
 | 제한 시간 | 60초 (기본 3초로는 부족) |
