@@ -16,6 +16,7 @@ import traceback
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from email.message import EmailMessage
+from email.utils import formataddr, formatdate, make_msgid
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -470,9 +471,13 @@ def send_email(subject: str, attachment_path: Path, attachment_name: str) -> Non
         raise RuntimeError("환경변수 GMAIL_APP_PASSWORD 이(가) 설정되지 않았습니다. .env 파일을 확인하세요.")
     msg = EmailMessage()
     msg["Subject"] = subject
-    msg["From"] = GMAIL_ADDRESS
+    msg["From"] = formataddr((SENDER_DISPLAY_NAME, GMAIL_ADDRESS))
     msg["To"] = RECIPIENT_EMAIL
-    msg.set_content("")
+    # 본문이 비어 있고 첨부만 있는 메일은 스팸으로 분류되기 쉽다.
+    # Date/Message-ID가 없는 것도 같은 이유라 명시적으로 채운다.
+    msg["Date"] = formatdate(localtime=True)
+    msg["Message-ID"] = make_msgid(domain=GMAIL_ADDRESS.rsplit("@", 1)[-1])
+    msg.set_content(f"{subject}입니다.\n\n자세한 내용은 첨부된 PDF를 확인해 주세요.\n")
     with open(attachment_path, "rb") as f:
         msg.add_attachment(
             f.read(), maintype="application", subtype="pdf", filename=attachment_name
@@ -487,6 +492,8 @@ def send_error_alert(error_text: str) -> None:
     msg["Subject"] = "[훈련일지 자동발송 오류]"
     msg["From"] = GMAIL_ADDRESS
     msg["To"] = GMAIL_ADDRESS
+    msg["Date"] = formatdate(localtime=True)
+    msg["Message-ID"] = make_msgid(domain=GMAIL_ADDRESS.rsplit("@", 1)[-1])
     msg.set_content(error_text[-4000:])
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
         smtp.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)

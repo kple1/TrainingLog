@@ -5,7 +5,8 @@ Notion "훈련일지" 페이지 하위에 매일 생성되는 당일 페이지�
 
 - 보내는 사람 / 받는 사람 / 표시 이름: `.env`의 `GMAIL_ADDRESS` / `RECIPIENT_EMAIL` / `SENDER_DISPLAY_NAME` 참고 (실제 값은 서버 `.env`에만 있고 저장소에는 없음)
 - 제목: `yyyy MM dd <SENDER_DISPLAY_NAME> 훈련일지`
-- 첨부파일: `yyyy MM dd 훈련일지 NN일차.pdf` (PDF만 첨부, 본문 없음)
+- 첨부파일: `yyyy MM dd 훈련일지 NN일차.pdf`
+- 본문: 첨부 안내 한 줄. 본문이 비어 있으면 스팸으로 분류되는 문제가 있어 최소한의 문구를 넣는다.
 
 ## 1. 준비물
 
