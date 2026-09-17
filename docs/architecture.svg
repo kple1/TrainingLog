@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="650" viewBox="0 0 1200 650" role="img" aria-labelledby="title desc">
+  <title id="title">Training Log automation architecture</title>
+  <desc id="desc">EventBridge Scheduler triggers AWS Lambda. Lambda reads a daily Notion page, renders a Korean PDF, sends it through Gmail SMTP, and writes logs to CloudWatch.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#0b1020"/><stop offset="1" stop-color="#1b1630"/></linearGradient>
+    <linearGradient id="lambda" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#f97316"/><stop offset="1" stop-color="#c2410c"/></linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#020617" flood-opacity=".45"/></filter>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0L10 5 0 10z" fill="#fbbf24"/></marker>
+    <marker id="arrow-blue" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0L10 5 0 10z" fill="#38bdf8"/></marker>
+    <style>
+      .title { font: 700 30px Inter, Pretendard, "Noto Sans KR", Arial, sans-serif; fill: #f8fafc; }
+      .subtitle { font: 400 15px Inter, Pretendard, "Noto Sans KR", Arial, sans-serif; fill: #a5b4fc; }
+      .section { font: 700 13px Inter, Pretendard, "Noto Sans KR", Arial, sans-serif; fill: #fcd34d; letter-spacing: 1.4px; }
+      .card-title { font: 700 18px Inter, Pretendard, "Noto Sans KR", Arial, sans-serif; fill: #f8fafc; }
+      .card-text { font: 400 13px Inter, Pretendard, "Noto Sans KR", Arial, sans-serif; fill: #cbd5e1; }
+      .label { font: 600 12px Inter, Pretendard, "Noto Sans KR", Arial, sans-serif; fill: #fde68a; }
+    </style>
+  </defs>
+  <rect width="1200" height="650" rx="24" fill="url(#bg)"/>
+  <circle cx="1060" cy="50" r="190" fill="#f97316" opacity=".07"/><circle cx="80" cy="620" r="180" fill="#6366f1" opacity=".08"/>
+  <text x="48" y="56" class="title">Training Log Automation</text>
+  <text x="48" y="84" class="subtitle">Notion → PDF → Email, completely serverless on AWS</text>
+
+  <text x="48" y="132" class="section">SCHEDULE</text>
+  <g filter="url(#shadow)">
+    <rect x="48" y="154" width="244" height="150" rx="18" fill="#171c30" stroke="#fbbf24"/>
+    <circle cx="84" cy="192" r="19" fill="#fbbf24"/><path d="M84 180v13l9 6" fill="none" stroke="#422006" stroke-width="3" stroke-linecap="round"/>
+    <text x="116" y="194" class="card-title">EventBridge</text>
+    <text x="72" y="230" class="card-text">Scheduler · Asia/Seoul</text>
+    <text x="72" y="255" class="card-text">월–금 22:10 · 토 18:10</text>
+    <text x="72" y="280" class="card-text">일요일 실행 없음</text>
+
+    <rect x="48" y="396" width="244" height="132" rx="18" fill="#171c30" stroke="#818cf8"/>
+    <circle cx="84" cy="434" r="19" fill="#6366f1"/><path d="M75 434h18M79 427l-7 7 7 7" fill="none" stroke="#eef2ff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="116" y="436" class="card-title">Deploy package</text>
+    <text x="72" y="472" class="card-text">Linux x86_64에서 zip 빌드</text>
+    <text x="72" y="497" class="card-text">Python 3.14 · 한글 폰트 포함</text>
+  </g>
+
+  <rect x="358" y="124" width="448" height="438" rx="24" fill="#171c30" stroke="#fb923c" stroke-width="2"/>
+  <text x="392" y="164" class="section">AWS LAMBDA · PYTHON 3.14</text>
+  <g filter="url(#shadow)">
+    <rect x="408" y="200" width="348" height="138" rx="20" fill="url(#lambda)"/>
+    <text x="444" y="240" class="card-title">send_daily_report</text>
+    <text x="444" y="271" class="card-text" fill="#fff7ed">1. KST 날짜의 하위 페이지 검색</text>
+    <text x="444" y="296" class="card-text" fill="#fff7ed">2. Notion 블록을 A4 PDF로 렌더링</text>
+    <text x="444" y="321" class="card-text" fill="#fff7ed">3. PDF를 이메일 첨부로 발송</text>
+
+    <rect x="408" y="380" width="162" height="116" rx="16" fill="#111827" stroke="#60a5fa"/>
+    <text x="432" y="418" class="card-title">/tmp</text>
+    <text x="432" y="448" class="card-text">PDF 임시 생성</text>
+    <text x="432" y="471" class="card-text">호출 후 폐기</text>
+
+    <rect x="594" y="380" width="162" height="116" rx="16" fill="#111827" stroke="#a78bfa"/>
+    <text x="618" y="418" class="card-title">CloudWatch</text>
+    <text x="618" y="448" class="card-text">실행 로그</text>
+    <text x="618" y="471" class="card-text">실패 추적</text>
+  </g>
+
+  <text x="866" y="132" class="section">EXTERNAL SERVICES</text>
+  <g filter="url(#shadow)">
+    <rect x="858" y="154" width="294" height="118" rx="18" fill="#171c30" stroke="#f8fafc"/>
+    <circle cx="894" cy="192" r="19" fill="#f8fafc"/><text x="894" y="199" text-anchor="middle" font-family="Arial" font-size="21" font-weight="700" fill="#111827">N</text>
+    <text x="928" y="194" class="card-title">Notion API</text>
+    <text x="882" y="230" class="card-text">당일 훈련일지와 하위 블록 조회</text>
+    <text x="882" y="252" class="card-text">텍스트 · 표 · 이미지 · 코드</text>
+
+    <rect x="858" y="318" width="294" height="118" rx="18" fill="#171c30" stroke="#ef4444"/>
+    <circle cx="894" cy="356" r="19" fill="#ef4444"/><path d="M882 348l12 10 12-10v17h-24z" fill="none" stroke="#fff" stroke-width="2"/>
+    <text x="928" y="358" class="card-title">Gmail SMTP</text>
+    <text x="882" y="394" class="card-text">SSL :465 · 앱 비밀번호</text>
+    <text x="882" y="416" class="card-text">PDF 첨부 + 오류 알림</text>
+
+    <rect x="858" y="482" width="294" height="92" rx="18" fill="#171c30" stroke="#22c55e"/>
+    <circle cx="894" cy="528" r="19" fill="#16a34a"/><path d="M884 528l7 7 14-15" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="928" y="522" class="card-title">Recipient</text>
+    <text x="928" y="548" class="card-text">완성된 훈련일지 PDF 수신</text>
+  </g>
+
+  <path d="M292 225H408" fill="none" stroke="#fbbf24" stroke-width="3" marker-end="url(#arrow)"/><text x="316" y="211" class="label">scheduled event</text>
+  <path d="M292 462H408" fill="none" stroke="#818cf8" stroke-width="3" stroke-dasharray="8 6" marker-end="url(#arrow-blue)"/><text x="318" y="450" class="card-text">zip upload</text>
+  <path d="M756 240C808 240 812 213 858 213" fill="none" stroke="#38bdf8" stroke-width="3" marker-end="url(#arrow-blue)"/><text x="775" y="222" class="card-text">read blocks</text>
+  <path d="M756 292C816 292 810 377 858 377" fill="none" stroke="#fbbf24" stroke-width="3" marker-end="url(#arrow)"/><text x="777" y="326" class="label">PDF mail</text>
+  <path d="M1005 436V482" fill="none" stroke="#22c55e" stroke-width="3" marker-end="url(#arrow-blue)"/>
+  <path d="M582 338V380" fill="none" stroke="#38bdf8" stroke-width="3" marker-end="url(#arrow-blue)"/>
+  <path d="M674 338V380" fill="none" stroke="#a78bfa" stroke-width="3" marker-end="url(#arrow-blue)"/>
+  <text x="600" y="616" text-anchor="middle" class="card-text">상시 서버 없음 · 실행 시점에만 Lambda가 동작 · 비밀값은 Lambda 환경 변수에 보관</text>
+</svg>

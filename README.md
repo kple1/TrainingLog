@@ -1,170 +1,241 @@
 # 훈련일지 자동 메일 발송
 
-Notion "훈련일지" 페이지 하위에 매일 생성되는 당일 페이지를 PDF로 변환해,
-매일 22:10(KST)에 이메일로 자동 발송한다.
+Notion의 당일 훈련일지 페이지를 읽어 한글 PDF로 변환하고 이메일로 보내는 서버리스 자동화입니다. 운영 환경에서는 **AWS Lambda**가 문서를 만들고, **EventBridge Scheduler**가 한국 시간 기준 발송 시각을 관리합니다.
 
-- 보내는 사람 / 받는 사람 / 표시 이름: `.env`의 `GMAIL_ADDRESS` / `RECIPIENT_EMAIL` / `SENDER_DISPLAY_NAME` 참고 (실제 값은 서버 `.env`에만 있고 저장소에는 없음)
-- 제목: `yyyy MM dd <SENDER_DISPLAY_NAME> 훈련일지`
-- 첨부파일: `yyyy MM dd 훈련일지 NN일차.pdf`
-- 본문: 첨부 안내 한 줄. 본문이 비어 있으면 스팸으로 분류되는 문제가 있어 최소한의 문구를 넣는다.
+<p align="left">
+  <img alt="Python" src="https://img.shields.io/badge/Python-3.14-3776AB?logo=python&logoColor=white">
+  <img alt="AWS Lambda" src="https://img.shields.io/badge/AWS_Lambda-Serverless-FF9900?logo=awslambda&logoColor=white">
+  <img alt="EventBridge" src="https://img.shields.io/badge/EventBridge-Scheduler-8C4FFF?logo=amazonwebservices&logoColor=white">
+  <img alt="Notion" src="https://img.shields.io/badge/Notion-Source-000000?logo=notion&logoColor=white">
+  <img alt="Gmail" src="https://img.shields.io/badge/Gmail-SMTP-EA4335?logo=gmail&logoColor=white">
+</p>
 
-## 1. 준비물
+## 현재 운영 상태
 
-### 1) Notion Integration
-1. https://www.notion.so/my-integrations 에서 Internal Integration 생성 (이미 있다면 생략)
-2. 발급된 Secret을 `.env`의 `NOTION_TOKEN`에 입력
-3. **중요**: Notion에서 "훈련일지" 페이지로 이동 → 우측 상단 `...` → `연결 추가(Connections)` → 방금 만든 integration 선택
-   - 하위 페이지들은 상위 "훈련일지" 페이지 연결을 그대로 상속받으므로 상위 페이지 한 곳만 연결하면 된다.
-   - 연결하지 않으면 API가 404를 반환한다.
+| 항목 | 운영 구성 |
+| --- | --- |
+| 실행 환경 | AWS Lambda · Python 3.14 · x86_64 |
+| 스케줄 | 월–금 22:10, 토 18:10, 일요일 미실행 |
+| 시간대 | `Asia/Seoul` |
+| 문서 원본 | Notion `훈련일지` 상위 페이지의 당일 하위 페이지 |
+| 결과물 | A4 PDF 이메일 첨부 |
+| 모니터링 | CloudWatch Logs + 오류 알림 메일 |
+| 이전 환경 | GCP VM cron 제거 완료 |
 
-### 2) Gmail 앱 비밀번호
-1. 발신용 Gmail 계정에 [2단계 인증](https://myaccount.google.com/security) 활성화
-2. https://myaccount.google.com/apppasswords 에서 앱 비밀번호 생성 (앱 이름 예: `training-log-mailer`)
-3. 생성된 16자리 비밀번호를 `.env`의 `GMAIL_APP_PASSWORD`에 공백 없이 입력
+> 운영 발송 시각은 EventBridge Scheduler가 관리합니다. `schedule.json`과 5분 폴링 로직은 로컬 또는 VM cron 실행용이며 Lambda에서는 사용하지 않습니다.
 
-### 3) .env 파일
+## 아키텍처
+
+<p align="center">
+  <img src="docs/architecture.svg" alt="EventBridge Scheduler가 AWS Lambda를 실행하고 Lambda가 Notion 데이터를 PDF로 변환해 Gmail로 발송하는 구조" width="100%">
+</p>
+
+발송 한 번의 흐름은 다음과 같습니다.
+
+1. EventBridge Scheduler가 KST 일정에 맞춰 Lambda를 호출합니다.
+2. Lambda가 오늘 날짜와 일치하는 Notion 하위 페이지를 찾습니다.
+3. 텍스트, 목록, 표, 코드, 이미지 등 Notion 블록을 재귀적으로 읽습니다.
+4. 번들된 NanumBarunGothic 폰트로 `/tmp`에 A4 PDF를 생성합니다.
+5. Gmail SMTP로 PDF를 첨부해 수신자에게 발송합니다.
+6. 실행 로그는 CloudWatch Logs에 남고, 실패하면 발신 계정으로 오류 알림을 보냅니다.
+
+## 주요 기능
+
+- **Notion 문서 변환** — 제목, 문단, 목록, 할 일, 인용문, 콜아웃, 코드, 표, 이미지와 중첩 블록 지원
+- **한글 PDF** — Lambda 패키지에 한글 폰트를 함께 넣어 시스템 폰트에 의존하지 않음
+- **서버리스 스케줄링** — 상시 VM 없이 예약 시각에만 Lambda 실행
+- **요일별 운영 일정** — 평일과 토요일을 별도 스케줄로 관리하고 일요일은 실행하지 않음
+- **수동 재발송** — Lambda 테스트 이벤트의 `date` 값으로 원하는 날짜를 다시 발송
+- **스팸 분류 완화** — 본문, `Date`, `Message-ID` 헤더를 명시적으로 구성
+- **이중 오류 경로** — Lambda 실패 기록과 오류 알림 메일을 함께 사용
+
+## 환경 변수
+
+로컬에서는 `.env`, Lambda에서는 함수 환경 변수로 같은 값을 주입합니다.
+
+| 변수 | 필수 | 설명 |
+| --- | --- | --- |
+| `NOTION_TOKEN` | 예 | Notion Internal Integration Secret |
+| `NOTION_PARENT_PAGE_ID` | 예 | `훈련일지` 상위 페이지 ID |
+| `GMAIL_ADDRESS` | 예 | 발신 Gmail 주소 |
+| `GMAIL_APP_PASSWORD` | 예 | 2단계 인증에서 발급한 Gmail 앱 비밀번호 |
+| `RECIPIENT_EMAIL` | 예 | 결과 PDF 수신 주소 |
+| `SENDER_DISPLAY_NAME` | 예 | 메일 제목과 발신자 표시에 사용할 이름 |
+| `FONT_REGULAR` | 아니요 | 로컬 실행 시 사용할 일반 한글 폰트 경로 |
+| `FONT_BOLD` | 아니요 | 로컬 실행 시 사용할 굵은 한글 폰트 경로 |
+| `SCHEDULE_FILE` | 아니요 | CLI/cron 모드의 스케줄 파일 경로 |
+| `CRON_INTERVAL_MINUTES` | 아니요 | CLI/cron 모드의 실행 허용 구간, 기본값 5분 |
+
 ```bash
 cp .env.example .env
-# .env 파일을 열어 NOTION_TOKEN, GMAIL_APP_PASSWORD, GMAIL_ADDRESS, RECIPIENT_EMAIL, SENDER_DISPLAY_NAME 값을 채운다
 ```
 
-## 2. 로컬/서버 실행
+### Notion 연결
+
+1. [Notion Integrations](https://www.notion.so/my-integrations)에서 Internal Integration을 만듭니다.
+2. `NOTION_TOKEN`에 발급된 Secret을 설정합니다.
+3. Notion의 `훈련일지` 상위 페이지에서 **연결 추가(Connections)**로 Integration을 연결합니다.
+
+상위 페이지에 연결하지 않으면 Notion API가 페이지를 찾지 못해 404를 반환합니다.
+
+### Gmail 앱 비밀번호
+
+1. 발신 Google 계정에서 2단계 인증을 켭니다.
+2. [앱 비밀번호](https://myaccount.google.com/apppasswords)를 생성합니다.
+3. 공백을 제거한 16자리 값을 `GMAIL_APP_PASSWORD`에 설정합니다.
+
+일반 Google 계정 비밀번호는 사용하지 않습니다.
+
+## 로컬 실행
+
+### 설치
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Ubuntu 서버에서는 한글 폰트가 필요하다:
+Linux에서 로컬 PDF를 만들 때는 한글 폰트를 설치합니다.
+
 ```bash
-sudo apt update && sudo apt install -y fonts-nanum
+sudo apt update
+sudo apt install -y fonts-nanum
 ```
 
-### 테스트 (메일 발송 없이 PDF만 생성)
+### PDF만 생성
+
 ```bash
 python send_daily_report.py --dry-run
-# 특정 날짜로 테스트하고 싶을 때
-python send_daily_report.py --dry-run --date 2026-07-09
-```
-생성된 PDF는 `output/` 폴더에서 확인할 수 있다.
-
-### 실제 발송
-```bash
-python send_daily_report.py
+python send_daily_report.py --dry-run --date 2026-09-16
 ```
 
-## 3. 요일별 발송 시각 / 차단 설정 (schedule.json)
+생성된 PDF는 `output/`에 저장됩니다.
 
-요일마다 다른 시각에 보내거나, 특정 요일은 아예 발송을 막고(blocked) 싶을 때 `schedule.json`을 수정한다.
-cron을 다시 등록할 필요 없이 이 파일만 편집하면 바로 적용된다 (다음 5분 이내 반영).
-
-```json
-{
-  "mon": { "enabled": true,  "time": "22:10" },
-  "tue": { "enabled": true,  "time": "22:10" },
-  "sat": { "enabled": false, "time": "20:00" }
-}
-```
-- `enabled: false` = 그 요일은 발송하지 않음 (시각 값은 남겨둬도 무시된다)
-- `time`은 KST 기준 `HH:MM`
-- cron이 5분 간격으로 실행되며 설정된 시각을 지났는지 확인하는 방식이라, 실제 발송은 최대 약 5분 늦게 이루어질 수 있다
-
-### cron 등록
-
-서버 시간대와 무관하게 스크립트 내부에서 KST로 판단하므로, cron 자체는 자주(예: 5분마다) 실행되도록만 등록하면 된다.
+### 즉시 발송
 
 ```bash
-crontab -e
-```
-다음 줄 추가:
-```
-*/5 * * * * cd /home/<user>/TrainingLog && /home/<user>/TrainingLog/.venv/bin/python send_daily_report.py >> /home/<user>/TrainingLog/logs/cron.log 2>&1
+python send_daily_report.py --force
+python send_daily_report.py --force --date 2026-09-16
 ```
 
-### 수동 실행 / 강제 발송
+`--force`는 로컬용 `schedule.json`과 중복 발송 플래그를 무시하므로, 운영 메일을 보낼 때만 주의해서 사용합니다.
 
-```bash
-python send_daily_report.py --force              # schedule.json 무시하고 오늘자 즉시 발송
-python send_daily_report.py --force --date 2026-07-05   # 특정 날짜 재발송
-```
+## AWS 배포
 
-## 4. 오류 처리
+### 1. Lambda 패키지 빌드
 
-- 당일 날짜의 하위 페이지를 찾지 못하거나, Notion/Gmail 오류가 발생하면 `GMAIL_ADDRESS`(발신 계정) 앞으로
-  `[훈련일지 자동발송 오류]` 제목의 알림 메일이 자동 발송된다.
-- 실행 로그는 `logs/app.log` 에 누적 기록된다 (최대 1MB x 3개 롤링). cron 실행 자체의 표준출력/에러는 `logs/cron.log`에 쌓인다.
-
-## 5. AWS Lambda + EventBridge 배포
-
-서버를 24시간 켜두지 않고 발송 시각에만 실행되게 하는 구성. 하루 몇 초만 쓰므로 Lambda 프리티어 안에서 사실상 무료다.
-이 구성에서는 **발송 시각/요일을 EventBridge가 관리**하므로 `schedule.json`은 사용하지 않는다.
-
-### 1) 배포 zip 만들기
-
-Lambda 런타임과 같은 Linux x86_64 머신에서 빌드해야 한다 (wheel 호환성).
+Lambda 런타임과 동일한 Python 버전의 Linux x86_64 환경에서 빌드해야 합니다. Pillow 같은 바이너리 wheel의 ABI가 런타임과 일치해야 하기 때문입니다.
 
 ```bash
 sudo apt install -y fonts-nanum zip
 PY_VERSION=3.14 bash scripts/build_lambda_package.sh
-# -> dist/traininglog-lambda.zip (약 14MB)
 ```
 
-> `PY_VERSION`은 **Lambda 함수에 설정한 런타임과 반드시 같아야 한다.** Pillow 같은 바이너리 의존성이
-> `cp312`, `cp314`처럼 파이썬 버전 태그로 고정돼 들어가기 때문에, 버전이 어긋나면 임포트 단계에서 실패한다.
-코드 + 의존성 + 한글 폰트(NanumBarunGothic)가 모두 들어 있어 Lambda에 시스템 폰트가 없어도 동작한다.
+결과물은 `dist/traininglog-lambda.zip`입니다. 코드, Python 의존성, NanumBarunGothic 일반·굵은 폰트가 함께 들어갑니다.
 
-### 2) Lambda 함수 생성 (콘솔)
+> Lambda 런타임을 바꾸면 `PY_VERSION`도 반드시 같은 버전으로 바꿔 다시 빌드해야 합니다.
+
+### 2. Lambda 함수 설정
 
 | 항목 | 값 |
 | --- | --- |
-| 런타임 | Python 3.14 (빌드 시 `PY_VERSION`과 일치시킬 것) |
-| 아키텍처 | x86_64 |
-| 핸들러 | `send_daily_report.lambda_handler` |
-| 제한 시간 | 60초 (기본 3초로는 부족) |
-| 메모리 | 512MB |
-| VPC | **연결하지 않음** (Notion API·SMTP 아웃바운드가 필요한데, VPC에 넣으면 NAT 게이트웨이 비용이 발생한다) |
+| Runtime | Python 3.14 |
+| Architecture | x86_64 |
+| Handler | `send_daily_report.lambda_handler` |
+| Memory | 512 MB |
+| Timeout | 60초 |
+| VPC | 연결하지 않음 |
 
-코드는 `dist/traininglog-lambda.zip`을 업로드한다.
+Notion API와 Gmail SMTP에 인터넷으로 연결해야 하므로 Lambda를 VPC에 넣지 않습니다. 이 워크로드에 NAT Gateway를 추가하면 불필요한 고정 비용이 생길 수 있습니다.
 
-환경 변수(구성 → 환경 변수)에 `.env`와 같은 값을 넣는다:
-`NOTION_TOKEN`, `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD`, `RECIPIENT_EMAIL`, `SENDER_DISPLAY_NAME`
+### 3. EventBridge Scheduler
 
-### 3) EventBridge Scheduler로 발송 시각 등록
+두 스케줄 모두 시간대를 `Asia/Seoul`로 지정하고 대상을 Lambda 함수로 설정합니다.
 
-EventBridge **Scheduler**를 쓴다 (기존 EventBridge 규칙은 UTC만 지원하지만, Scheduler는 타임존을 직접 지정할 수 있다).
-타임존은 `Asia/Seoul`, 대상은 위 Lambda 함수로 지정한다.
-
-| 요일 | cron 식 |
+| 대상 요일 | Scheduler cron 식 |
 | --- | --- |
-| 월~금 22:10 | `cron(10 22 ? * MON-FRI *)` |
+| 월–금 22:10 | `cron(10 22 ? * MON-FRI *)` |
 | 토 18:10 | `cron(10 18 ? * SAT *)` |
 
-일요일처럼 보내지 않을 요일은 **스케줄을 만들지 않으면** 된다. 시각을 바꾸려면 해당 스케줄의 cron 식을 수정한다.
+일요일은 스케줄을 만들지 않습니다. 기존 EventBridge Rules가 아니라 시간대를 직접 지정할 수 있는 **EventBridge Scheduler**를 사용합니다.
 
-### 4) 테스트 / 수동 재발송
+### 4. 테스트 이벤트
 
-Lambda 콘솔의 테스트 이벤트에 아래 JSON을 넣어 호출한다.
+오늘자 문서를 실제 발송합니다.
 
 ```json
-{}                              // 오늘자 발송
-{"dry_run": true}               // PDF만 생성하고 메일은 보내지 않음
-{"date": "2026-07-28"}          // 특정 날짜 재발송
+{}
 ```
 
-실행 로그는 CloudWatch Logs에 남고, 오류가 나면 기존과 동일하게 `GMAIL_ADDRESS` 앞으로 알림 메일이 간다.
+PDF 생성까지만 테스트합니다.
 
-> **주의**: 기존 서버의 cron과 Lambda가 동시에 돌면 같은 날 메일이 두 번 간다.
-> Lambda 발송이 확인되면 기존 서버에서 `crontab -e`로 해당 줄을 지운다.
+```json
+{"dry_run": true}
+```
 
-## 6. 실제 배포 현황
+특정 날짜를 재발송합니다.
 
-- 배포 서버: 상시 켜져 있는 Ubuntu 24.04 클라우드 VM의 `~/TrainingLog`에 배치 (다른 개인 프로젝트와 같은 서버를 공유해서 쓰는 중)
-- 서버 시간대는 `Etc/UTC` 그대로 두고, cron은 `*/5 * * * *`(5분마다)로 등록해 `schedule.json`의 요일별 시각(KST)을 스크립트가 직접 판단한다
-- 한글 폰트는 `fonts-nanum` 패키지의 `NanumBarunGothic`을 사용한다 (Noto Sans CJK의 .ttc는 OpenType/CFF 윤곽선이라 reportlab에서 열리지 않아 제외함)
-- 코드 수정 후 재배포:
-  ```bash
-  scp send_daily_report.py <user>@<host>:~/TrainingLog/
-  ssh <user>@<host> "cd ~/TrainingLog && .venv/bin/python send_daily_report.py --dry-run"
-  ```
-  (실제 접속 정보는 로컬 SSH 설정을 참고)
+```json
+{"date": "2026-09-16"}
+```
+
+## 로컬 스케줄 모드
+
+`schedule.json`은 Lambda가 아닌 CLI/cron 실행을 위한 호환 경로입니다.
+
+```json
+{
+  "mon": { "enabled": true, "time": "22:10" },
+  "sat": { "enabled": true, "time": "18:10" },
+  "sun": { "enabled": false, "time": "22:10" }
+}
+```
+
+5분마다 스크립트를 실행하면 코드가 KST 기준 요일·시각과 당일 발송 여부를 판단합니다.
+
+```cron
+*/5 * * * * cd /path/to/TrainingLog && .venv/bin/python send_daily_report.py
+```
+
+> 현재 운영 환경은 Lambda입니다. cron을 함께 켜면 같은 메일이 두 번 발송될 수 있으므로 운영 환경에서는 하나만 사용하세요.
+
+## 로그와 오류 처리
+
+| 환경 | 로그 위치 | 오류 처리 |
+| --- | --- | --- |
+| AWS Lambda | CloudWatch Logs | Lambda 호출 실패 + 발신 Gmail로 오류 메일 |
+| 로컬/cron | `logs/app.log` | 종료 코드 1 + 발신 Gmail로 오류 메일 |
+
+로컬 로그는 최대 1 MB 파일 3개로 순환합니다. Lambda에서는 읽기 전용 파일시스템 제약 때문에 파일 로그를 만들지 않고 표준출력을 CloudWatch로 보냅니다.
+
+## 프로젝트 구조
+
+```text
+TrainingLog/
+├── send_daily_report.py             # CLI 및 Lambda 진입점
+├── requirements.txt                 # requests, reportlab, Pillow 등
+├── schedule.json                    # 로컬/cron 전용 일정
+├── .env.example                     # 환경 변수 템플릿
+├── scripts/
+│   └── build_lambda_package.sh      # Linux x86_64 배포 zip 생성
+└── docs/
+    └── architecture.svg             # README 아키텍처 다이어그램
+```
+
+## 보안과 비용
+
+- `.env`, Notion 토큰, Gmail 앱 비밀번호는 커밋하지 않습니다.
+- 실제 비밀값은 Lambda 환경 변수에만 보관하고 배포 zip에는 넣지 않습니다.
+- Gmail 앱 비밀번호가 노출되면 즉시 폐기하고 새로 발급합니다.
+- 하루에 짧게 실행되는 경량 워크로드라 일반적으로 AWS 프리 티어 범위에 머물지만, 실제 사용량과 계정 정책은 AWS Billing에서 확인합니다.
+
+## 라이선스
+
+개인 업무 자동화 및 학습 목적으로 제작되었습니다.
+
+---
+
+<p align="center">
+  <sub>Built with Python · Notion API · ReportLab · AWS Lambda · EventBridge Scheduler · Gmail SMTP</sub>
+</p>
