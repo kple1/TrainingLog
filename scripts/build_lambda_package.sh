@@ -10,7 +10,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="${1:-/tmp/traininglog-lambda-build}"
 OUT_ZIP="${2:-${HERE}/dist/traininglog-lambda.zip}"
 
-PY_VERSION=3.12
+# Lambda 함수에 설정한 런타임과 반드시 일치해야 한다 (바이너리 wheel이 cp<버전> 태그로 고정되기 때문).
+PY_VERSION="${PY_VERSION:-3.14}"
 FONT_DIR=/usr/share/fonts/truetype/nanum
 
 for font in NanumBarunGothic.ttf NanumBarunGothicBold.ttf; do
