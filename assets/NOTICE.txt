@@ -1,0 +1,10 @@
+rolled-newspaper.png
+Rolled-up newspaper (Unicode U+1F5DE) from Google Noto Emoji.
+Copyright 2013 Google, Inc. All Rights Reserved.
+Licensed under the Apache License, Version 2.0. See LICENSE-Noto-Emoji.txt.
+
+Original, unmodified PNG:
+https://github.com/googlefonts/noto-emoji/blob/41e31b110b4eb929dffb410264694a06205b7ad7/png/128/emoji_u1f5de.png
+
+Upstream licensing:
+https://github.com/googlefonts/noto-emoji/blob/41e31b110b4eb929dffb410264694a06205b7ad7/README.md#license

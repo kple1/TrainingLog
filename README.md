@@ -49,6 +49,12 @@ Notion의 당일 훈련일지 페이지를 읽어 한글 PDF로 변환하고 이
 - **스팸 분류 완화** — 본문, `Date`, `Message-ID` 헤더를 명시적으로 구성
 - **이중 오류 경로** — Lambda 실패 기록과 오류 알림 메일을 함께 사용
 
+## PDF 출력 방식
+
+Notion 화면에서 페이지 메뉴의 **내보내기 → PDF**를 선택하면 Notion이 만든 파일을 받을 수 있습니다. 예약 발송에 사용하는 Notion 공개 API에는 PDF 내보내기 엔드포인트가 공개되어 있지 않습니다. [Notion 내보내기 도움말](https://www.notion.com/ko/help/export-your-content), [Notion 개발자 문서 목록](https://developers.notion.com/llms.txt)
+
+예약 발송은 기존 Notion 연결로 본문을 읽고 ReportLab으로 A4 PDF를 생성합니다. 훈련일지의 원본 내보내기를 기준으로 여백, 두 줄 제목, 시간표의 열 너비, 바닥글의 문서명과 페이지 번호를 맞췄습니다. 페이지에 신문 이모지가 설정되어 있으면 동봉된 [Noto Emoji 이미지](assets/NOTICE.txt)를 표시합니다. 여러 페이지에 걸친 표에서는 열 헤더를 반복하고 길이가 긴 본문 셀을 나눠서 표시합니다. 세로로 긴 이미지는 페이지에 맞춰 축소하며 캡션을 함께 표시합니다. 글꼴과 줄바꿈, 페이지 나눔은 Notion에서 내보낸 파일과 달라질 수 있습니다.
+
 ## 환경 변수
 
 로컬에서는 `.env`, Lambda에서는 함수 환경 변수로 같은 값을 주입합니다.
@@ -110,7 +116,7 @@ python send_daily_report.py --dry-run
 python send_daily_report.py --dry-run --date 2026-09-16
 ```
 
-생성된 PDF는 `output/`에 저장됩니다.
+생성된 PDF는 `output/`에 저장됩니다. 서식을 비교하려면 같은 날짜의 Notion 원본을 A4, 크기 비율 100%로 내보낸 뒤 제목과 본문, 표 열 순서, 페이지가 넘어가는 부분을 확인합니다.
 
 ### 즉시 발송
 
@@ -132,7 +138,7 @@ sudo apt install -y fonts-nanum zip
 PY_VERSION=3.14 bash scripts/build_lambda_package.sh
 ```
 
-결과물은 `dist/traininglog-lambda.zip`입니다. 코드, Python 의존성, NanumBarunGothic 일반·굵은 폰트가 함께 들어갑니다.
+결과물은 `dist/traininglog-lambda.zip`입니다. 코드, Python 의존성, NanumBarunGothic 일반·굵은 폰트, PDF 아이콘이 함께 들어갑니다.
 
 > Lambda 런타임을 바꾸면 `PY_VERSION`도 반드시 같은 버전으로 바꿔 다시 빌드해야 합니다.
 
@@ -217,6 +223,7 @@ TrainingLog/
 ├── requirements.txt                 # requests, reportlab, Pillow 등
 ├── schedule.json                    # 로컬/cron 전용 일정
 ├── .env.example                     # 환경 변수 템플릿
+├── assets/                          # PDF에 쓰는 신문 아이콘과 라이선스
 ├── scripts/
 │   └── build_lambda_package.sh      # Linux x86_64 배포 zip 생성
 └── docs/
