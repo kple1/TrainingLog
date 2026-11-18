@@ -38,7 +38,9 @@ python3 -m pip install \
 
 echo "==> 코드/폰트 복사"
 cp "${HERE}/send_daily_report.py" "$BUILD_DIR/"
+cp -R "${HERE}/assets" "$BUILD_DIR/"
 cp "${FONT_DIR}/NanumBarunGothic.ttf" "${FONT_DIR}/NanumBarunGothicBold.ttf" "$BUILD_DIR/fonts/"
+cp /usr/share/doc/fonts-nanum/copyright "$BUILD_DIR/fonts/LICENSE.txt"
 
 echo "==> zip 생성"
 mkdir -p "$(dirname "$OUT_ZIP")"

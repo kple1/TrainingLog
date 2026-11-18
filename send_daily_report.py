@@ -9,6 +9,7 @@ import io
 import json
 import logging
 import os
+import re
 import smtplib
 import sys
 import time
@@ -17,6 +18,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from email.message import EmailMessage
 from email.utils import formataddr, formatdate, make_msgid
+from html import escape
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -29,9 +31,11 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfgen.canvas import Canvas
 from reportlab.platypus import (
     HRFlowable,
     Image,
+    KeepTogether,
     Paragraph,
     SimpleDocTemplate,
     Spacer,
@@ -108,22 +112,24 @@ log = setup_logging()
 # --------------------------------------------------------------------------
 # Notion API
 # --------------------------------------------------------------------------
-def notion_request(method: str, path: str, **kwargs) -> dict:
+def notion_request(
+    method: str, path: str, *, timeout: float | tuple[float, float] = 30,
+    attempts: int = 5, **kwargs,
+) -> dict:
     headers = {
         "Authorization": f"Bearer {NOTION_TOKEN}",
         "Notion-Version": NOTION_VERSION,
     }
     url = f"{NOTION_API_BASE}{path}"
-    for attempt in range(5):
-        resp = requests.request(method, url, headers=headers, timeout=30, **kwargs)
-        if resp.status_code == 429:
+    for attempt in range(attempts):
+        resp = requests.request(method, url, headers=headers, timeout=timeout, **kwargs)
+        if resp.status_code == 429 and attempt + 1 < attempts:
             wait = int(resp.headers.get("Retry-After", "2"))
             log.warning("Notion API rate limited, %s초 대기", wait)
             time.sleep(wait)
             continue
         resp.raise_for_status()
         return resp.json()
-    resp.raise_for_status()
     raise RuntimeError("unreachable")
 
 
@@ -146,8 +152,6 @@ DATE_TITLE_RE = None
 
 
 def _date_title_re():
-    import re
-
     global DATE_TITLE_RE
     if DATE_TITLE_RE is None:
         DATE_TITLE_RE = re.compile(r"(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})\.?")
@@ -180,6 +184,15 @@ def find_daily_page(parent_id: str, target_date: date) -> tuple[str, str] | None
         if parsed and parsed[0] == target_date:
             return block["id"], parsed[1]
     return None
+
+
+def get_page_icon(page_id: str) -> dict | None:
+    try:
+        page = notion_request("GET", f"/pages/{page_id}", timeout=(3, 5), attempts=1)
+    except requests.RequestException as exc:
+        log.warning("Notion 페이지 아이콘을 조회하지 못했습니다 (%s).", type(exc).__name__)
+        return None
+    return page.get("icon")
 
 
 # --------------------------------------------------------------------------
@@ -226,21 +239,39 @@ def register_fonts() -> None:
 
 
 def build_styles() -> dict[str, ParagraphStyle]:
+    base = ParagraphStyle(
+        "Body", fontName="Korean", fontSize=12, leading=18, textColor=colors.black,
+        spaceAfter=4,
+    )
+    heading = ParagraphStyle(
+        "Heading", parent=base, fontName="Korean-Bold", keepWithNext=True,
+    )
+    cell = ParagraphStyle("Cell", parent=base, fontSize=10.5, leading=15.75, spaceAfter=0)
     return {
-        # Notion 원본 제목은 "2026. 07. 25.<br>훈련일지 141일차"처럼 한 제목이 줄바꿈된 것뿐이라
-        # 두 줄 모두 같은 제목 크기/굵기로 표시한다 (작은 회색 부제목처럼 보이면 안 됨).
-        "h1": ParagraphStyle("KH1", fontName="Korean-Bold", fontSize=20, leading=26, spaceAfter=2),
-        "h1_line2": ParagraphStyle("KH1Line2", fontName="Korean-Bold", fontSize=20, leading=26, spaceAfter=16),
-        "h2": ParagraphStyle("KH2", fontName="Korean-Bold", fontSize=15, leading=21, spaceBefore=16, spaceAfter=8),
-        "h3": ParagraphStyle("KH3", fontName="Korean-Bold", fontSize=13, leading=19, spaceBefore=12, spaceAfter=5),
-        "base": ParagraphStyle("KBase", fontName="Korean", fontSize=11, leading=17),
-        "bullet": ParagraphStyle("KBullet", fontName="Korean", fontSize=11, leading=17, leftIndent=14),
-        "quote": ParagraphStyle("KQuote", fontName="Korean", fontSize=11, leading=17, leftIndent=14, textColor=colors.grey),
-        "cell": ParagraphStyle("KCell", fontName="Korean", fontSize=10.5, leading=15),
-        "cell_bold": ParagraphStyle("KCellBold", fontName="Korean-Bold", fontSize=10.5, leading=15),
-        # 코드 블록에 한글 주석이 섞이는 경우가 많아 고정폭 Courier 대신 한글 폰트를 사용한다
-        # (Courier는 한글 글리프가 없어 네모(tofu)로 깨짐).
-        "code": ParagraphStyle("KCode", fontName="Korean", fontSize=9, leading=13, backColor=colors.whitesmoke, leftIndent=8),
+        "title": ParagraphStyle("Title", parent=heading, fontSize=30, leading=36, spaceAfter=24),
+        "heading_1": ParagraphStyle("H1", parent=heading, fontSize=22, leading=28, spaceBefore=17, spaceAfter=6),
+        "heading_2": ParagraphStyle("H2", parent=heading, fontSize=18, leading=24, spaceBefore=16, spaceAfter=5),
+        "heading_3": ParagraphStyle("H3", parent=heading, fontSize=15, leading=20, spaceBefore=12, spaceAfter=4),
+        "base": base,
+        "bullet": ParagraphStyle(
+            "Bullet", parent=base, bulletFontName="Korean", bulletFontSize=11,
+            leftIndent=21, bulletIndent=6, spaceAfter=2,
+        ),
+        "quote": ParagraphStyle("Quote", parent=base, leftIndent=11, spaceBefore=4, spaceAfter=5),
+        "callout": ParagraphStyle(
+            "Callout", parent=base, leftIndent=9, rightIndent=9, borderPadding=7,
+            backColor=colors.HexColor("#F1F0EF"), spaceBefore=10, spaceAfter=10,
+        ),
+        "cell": cell,
+        "cell_bold": ParagraphStyle("CellBold", parent=cell, fontName="Korean-Bold"),
+        "caption": ParagraphStyle(
+            "Caption", parent=base, fontSize=9, leading=13, textColor=colors.HexColor("#787774"),
+            spaceBefore=4, spaceAfter=7,
+        ),
+        "code": ParagraphStyle(
+            "Code", parent=base, fontSize=9, leading=13, backColor=colors.HexColor("#F7F6F3"),
+            leftIndent=9, rightIndent=9, borderPadding=7, spaceBefore=10, spaceAfter=10,
+        ),
     }
 
 
@@ -248,7 +279,8 @@ def indented(style: ParagraphStyle, level: int) -> ParagraphStyle:
     if level <= 0:
         return style
     return ParagraphStyle(
-        f"{style.name}_L{level}", parent=style, leftIndent=(style.leftIndent or 0) + level * 12
+        f"{style.name}_L{level}", parent=style,
+        leftIndent=style.leftIndent + level * 12, bulletIndent=style.bulletIndent + level * 12,
     )
 
 
@@ -256,7 +288,7 @@ def indented(style: ParagraphStyle, level: int) -> ParagraphStyle:
 # 리치 텍스트 / 블록 -> PDF 요소 변환
 # --------------------------------------------------------------------------
 def esc(text: str) -> str:
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return escape(text, quote=False)
 
 
 def _code_line_markup(line: str) -> str:
@@ -268,8 +300,7 @@ def _code_line_markup(line: str) -> str:
     return indent_markup + esc(stripped)
 
 
-# Notion 텍스트 색상 -> 근사 hex (배경색 계열은 같은 색의 글자색으로 대체한다;
-# reportlab의 미니 마크업으로는 인라인 하이라이트 배경을 안전하게 표현하기 어렵다).
+# Notion 기본 테마의 텍스트와 강조 배경색에 가까운 색상.
 NOTION_COLOR_MAP = {
     "gray": "#787774",
     "brown": "#976D57",
@@ -281,60 +312,95 @@ NOTION_COLOR_MAP = {
     "pink": "#B54C6D",
     "red": "#C4554D",
 }
+NOTION_BACKGROUND_MAP = {
+    "gray_background": "#F1F0EF",
+    "brown_background": "#F4EEEE",
+    "orange_background": "#FBECDD",
+    "yellow_background": "#FBF3DB",
+    "green_background": "#EDF3EC",
+    "blue_background": "#E7F3F8",
+    "purple_background": "#F6F3F9",
+    "pink_background": "#FAF1F5",
+    "red_background": "#FDEBEC",
+}
+TRAINING_TIME_RANGE = re.compile(r"(?:\d{1,2}:\d{2}\s*)?[~∼–-]\s*\d{1,2}:\d{2}")
 
 
-def rich_text_markup(rich_text_list: list[dict]) -> str:
+def rich_text_markup(rich_text_list: list[dict] | None) -> str:
     parts = []
     for rt in rich_text_list or []:
         text = esc(rt.get("plain_text", "")).replace("\n", "<br/>")
         if not text:
             continue
         ann = rt.get("annotations", {})
-        if ann.get("code"):
-            text = f'<font face="Korean">{text}</font>'
         if ann.get("bold"):
             text = f"<b>{text}</b>"
         if ann.get("italic"):
             text = f"<i>{text}</i>"
         if ann.get("strikethrough"):
             text = f"<strike>{text}</strike>"
+        if ann.get("underline"):
+            text = f"<u>{text}</u>"
         color_name = ann.get("color", "default")
-        if color_name and color_name != "default":
-            hex_color = NOTION_COLOR_MAP.get(color_name.replace("_background", ""))
-            if hex_color:
-                text = f'<font color="{hex_color}">{text}</font>'
+        color = NOTION_COLOR_MAP.get(color_name)
+        background = NOTION_BACKGROUND_MAP.get(color_name)
+        if ann.get("code"):
+            color = color or "#EB5757"
+            background = background or "#F1F0EF"
+        if color:
+            text = f'<font color="{color}">{text}</font>'
+        if background:
+            text = f'<span backColor="{background}">{text}</span>'
         href = rt.get("href")
-        if href:
-            text = f'<link href="{esc(href)}"><u>{text}</u></link>'
+        if href and href.lower().startswith(("https://", "http://", "mailto:", "tel:", "notion://")):
+            label = text if ann.get("underline") else f"<u>{text}</u>"
+            text = f'<link href="{escape(href)}">{label}</link>'
         parts.append(text)
     return "".join(parts)
 
 
-def build_image_flowable(image_data: dict, max_width: float) -> Image | None:
+def build_image_flowable(image_data: dict, max_width: float, max_height: float) -> Image | None:
     file_info = image_data.get("file") or image_data.get("external")
     url = file_info.get("url") if file_info else None
     if not url:
         return None
     try:
-        resp = requests.get(url, timeout=30)
+        resp = requests.get(url, timeout=(3, 15))
         resp.raise_for_status()
         from PIL import Image as PILImage
 
-        pil_img = PILImage.open(io.BytesIO(resp.content))
-        width, height = pil_img.size
-        scale = min(max_width / width, 1.0)
+        with PILImage.open(io.BytesIO(resp.content)) as pil_img:
+            width, height = pil_img.size
+            pil_img.verify()
+        scale = min(max_width / width, max_height / height, 1.0)
         return Image(io.BytesIO(resp.content), width=width * scale, height=height * scale)
-    except Exception:
-        log.warning("이미지 다운로드 실패: %s", url, exc_info=True)
+    except Exception as exc:
+        log.warning("Notion 이미지를 읽지 못했습니다 (%s).", type(exc).__name__)
         return None
 
 
-def build_table_flowable(table_block: dict, styles: dict, max_width: float) -> Table | None:
+def build_page_icon(icon: dict) -> Image | None:
+    if (icon.get("emoji") or "").rstrip("\ufe0f") == "🗞":
+        asset = BASE_DIR / "assets" / "rolled-newspaper.png"
+        if not asset.is_file():
+            log.warning("훈련일지 아이콘 파일을 찾지 못했습니다.")
+            return None
+        image = Image(str(asset), width=42, height=42, kind="proportional")
+    else:
+        image = build_image_flowable(icon, 42, 42)
+    if image:
+        image.hAlign = "LEFT"
+        image.spaceAfter = 12
+    return image
+
+
+def build_table_flowable(table_block: dict, styles: dict, max_width: float, max_height: float) -> Table | None:
     rows = list_children(table_block["id"])
     has_col_header = table_block["table"].get("has_column_header", False)
     has_row_header = table_block["table"].get("has_row_header", False)
     data = []
-    col_weight: list[int] = []
+    col_weight: list[float] = []
+    first_column_text = []
     for r_idx, row in enumerate(rows):
         cells = row["table_row"]["cells"]
         row_data = []
@@ -342,38 +408,78 @@ def build_table_flowable(table_block: dict, styles: dict, max_width: float) -> T
             is_header = (r_idx == 0 and has_col_header) or (c_idx == 0 and has_row_header)
             style = styles["cell_bold"] if is_header else styles["cell"]
             row_data.append(Paragraph(rich_text_markup(cell), style))
-            # 셀 내 가장 긴 줄의 길이를 기준으로 컬럼별 비중을 잡는다 (긴 줄바꿈 텍스트가 폭을 과도하게 넓히지 않도록).
+            # Blocks API는 표의 개별 열 너비를 제공하지 않는다.
             cell_text = "".join(rt.get("plain_text", "") for rt in cell)
-            longest_line = max((len(line) for line in cell_text.split("\n")), default=1) or 1
+            if c_idx == 0 and not (r_idx == 0 and has_col_header) and cell_text.strip():
+                first_column_text.append(cell_text.strip())
+            longest_line = max(
+                pdfmetrics.stringWidth(line, style.fontName, style.fontSize)
+                for line in cell_text.split("\n")
+            )
             if c_idx >= len(col_weight):
-                col_weight.append(longest_line)
+                col_weight.append(max(longest_line, 1))
             else:
                 col_weight[c_idx] = max(col_weight[c_idx], longest_line)
         data.append(row_data)
-    if not data:
+    if not col_weight:
         return None
-    col_count = len(data[0])
-    min_width = 20 * mm
-    total_weight = sum(col_weight) or col_count
-    raw_widths = [max(min_width, max_width * (w / total_weight)) for w in col_weight]
-    scale = max_width / sum(raw_widths)
-    col_widths = [w * scale for w in raw_widths]
-    table = Table(data, colWidths=col_widths)
+    total_weight = sum(col_weight)
+    is_training_schedule = len(col_weight) == 2 and bool(first_column_text) and all(
+        TRAINING_TIME_RANGE.fullmatch(text) for text in first_column_text
+    )
+    if is_training_schedule:
+        # 훈련일지 시간표 양식의 열 비율을 사용한다.
+        col_widths = [max_width * 0.206, max_width * 0.794]
+    else:
+        min_width = min(20 * mm, max_width / len(col_weight))
+        widths = [max(min_width, max_width * weight / total_weight) for weight in col_weight]
+        col_widths = [width * max_width / sum(widths) for width in widths]
+    padding = min(6, min(col_widths) * 0.15)
+    repeat_rows = 0
+    if has_col_header:
+        header_height = max(
+            cell.wrap(width - 2 * padding, max_height)[1]
+            for cell, width in zip(data[0], col_widths)
+        )
+        # 큰 헤더가 본문 한 줄까지 밀어내면 페이지를 나눌 수 없다.
+        repeat_rows = int(header_height + styles["cell"].leading + 12 < max_height)
+    table = Table(
+        data, colWidths=col_widths, hAlign="LEFT", spaceBefore=4, spaceAfter=8,
+        repeatRows=repeat_rows, splitInRow=1,
+    )
     style_cmds = [
-        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E7E7E7")),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 4),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING", (0, 0), (-1, -1), padding),
+        ("RIGHTPADDING", (0, 0), (-1, -1), padding),
         ("TOPPADDING", (0, 0), (-1, -1), 3),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
     ]
+    if is_training_schedule:
+        style_cmds.append(("VALIGN", (0, 0), (0, -1), "MIDDLE"))
+    header_color = colors.HexColor("#F7F6F3")
     if has_col_header:
-        style_cmds.append(("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke))
+        style_cmds.append(("BACKGROUND", (0, 0), (-1, 0), header_color))
+    if has_row_header:
+        style_cmds.append(("BACKGROUND", (0, 0), (0, -1), header_color))
     table.setStyle(TableStyle(style_cmds))
     return table
 
 
-def blocks_to_flowables(blocks: list[dict], styles: dict, max_width: float, level: int = 0) -> list:
+class QuoteParagraph(Paragraph):
+    def draw(self) -> None:
+        self.canv.saveState()
+        self.canv.setStrokeColor(self.style.textColor)
+        self.canv.setLineWidth(1.5)
+        x = self.style.leftIndent - 10
+        self.canv.line(x, 0, x, self.height)
+        self.canv.restoreState()
+        super().draw()
+
+
+def blocks_to_flowables(
+    blocks: list[dict], styles: dict, max_width: float, max_height: float, level: int = 0,
+) -> list:
     flow = []
     num_counter = 0
     for block in blocks:
@@ -381,53 +487,76 @@ def blocks_to_flowables(blocks: list[dict], styles: dict, max_width: float, leve
         data = block.get(btype, {})
         if btype != "numbered_list_item":
             num_counter = 0
+        content_width = max_width - level * 12
 
-        if btype == "heading_1":
-            flow.append(Paragraph(rich_text_markup(data.get("rich_text")), indented(styles["h2"], level)))
-        elif btype == "heading_2":
-            flow.append(Paragraph(rich_text_markup(data.get("rich_text")), indented(styles["h2"], level)))
-        elif btype in ("heading_3", "heading_4", "heading_5", "heading_6"):
-            flow.append(Paragraph(rich_text_markup(data.get("rich_text")), indented(styles["h3"], level)))
+        if btype.startswith("heading_"):
+            style = styles.get(btype, styles["heading_3"])
+            flow.append(Paragraph(rich_text_markup(data.get("rich_text")), indented(style, level)))
         elif btype == "divider":
-            flow.append(HRFlowable(width="100%", thickness=0.5, color=colors.grey, spaceBefore=4, spaceAfter=8))
+            flow.append(HRFlowable(
+                width="100%", thickness=0.5, color=colors.HexColor("#E7E7E7"),
+                spaceBefore=6, spaceAfter=11,
+            ))
         elif btype == "paragraph":
             text = rich_text_markup(data.get("rich_text"))
             flow.append(Paragraph(text, indented(styles["base"], level)) if text else Spacer(1, 6))
-        elif btype == "bulleted_list_item":
+        elif btype in ("bulleted_list_item", "numbered_list_item", "to_do", "toggle"):
+            if btype == "numbered_list_item":
+                num_counter += 1
+                marker = f"{num_counter}."
+            elif btype == "to_do":
+                glyphs = pdfmetrics.getFont(styles["bullet"].bulletFontName).face.charWidths
+                if ord("☑") in glyphs and ord("☐") in glyphs:
+                    marker = "☑" if data.get("checked") else "☐"
+                else:
+                    marker = "[x]" if data.get("checked") else "[ ]"
+            else:
+                marker = "•" if btype == "bulleted_list_item" else "▶"
+            style = indented(styles["bullet"], level)
+            marker_width = pdfmetrics.stringWidth(marker, style.bulletFontName, style.bulletFontSize)
+            if style.bulletIndent + marker_width + 4 > style.leftIndent:
+                style = ParagraphStyle("WideBullet", parent=style, leftIndent=style.bulletIndent + marker_width + 4)
             text = rich_text_markup(data.get("rich_text"))
-            flow.append(Paragraph(f"• {text}", indented(styles["bullet"], level)))
-        elif btype == "numbered_list_item":
-            num_counter += 1
-            text = rich_text_markup(data.get("rich_text"))
-            flow.append(Paragraph(f"{num_counter}. {text}", indented(styles["bullet"], level)))
-        elif btype == "to_do":
-            box = "☑" if data.get("checked") else "☐"
-            text = rich_text_markup(data.get("rich_text"))
-            flow.append(Paragraph(f"{box} {text}", indented(styles["bullet"], level)))
-        elif btype == "toggle":
-            text = rich_text_markup(data.get("rich_text"))
-            flow.append(Paragraph(f"▶ {text}", indented(styles["bullet"], level)))
+            flow.append(Paragraph(text, style, bulletText=marker))
         elif btype == "quote":
             text = rich_text_markup(data.get("rich_text"))
-            flow.append(Paragraph(text, indented(styles["quote"], level)))
+            flow.append(QuoteParagraph(text, indented(styles["quote"], level)))
         elif btype == "callout":
             icon = data.get("icon") or {}
-            emoji = icon.get("emoji", "💡")
+            emoji = icon.get("emoji", "")
             text = rich_text_markup(data.get("rich_text"))
-            flow.append(Paragraph(f"{emoji} {text}", indented(styles["quote"], level)))
+            style = styles["callout"]
+            background = NOTION_BACKGROUND_MAP.get(data.get("color"))
+            if background:
+                style = ParagraphStyle("ColoredCallout", parent=style, backColor=colors.HexColor(background))
+            font = pdfmetrics.getFont(style.fontName)
+            if emoji and all(ord(char) in font.face.charWidths for char in emoji):
+                text = f"{esc(emoji)} {text}"
+            flow.append(Paragraph(text, indented(style, level)))
         elif btype == "code":
             raw_text = "".join(rt.get("plain_text", "") for rt in data.get("rich_text", []))
             text = "<br/>".join(_code_line_markup(line) for line in raw_text.split("\n"))
             flow.append(Paragraph(text, indented(styles["code"], level)))
         elif btype == "image":
-            img = build_image_flowable(data, max_width - level * 12)
+            caption_text = rich_text_markup(data.get("caption"))
+            caption = Paragraph(caption_text, indented(styles["caption"], level)) if caption_text else None
+            caption_height = caption.wrap(max_width, max_height)[1] + 12 if caption else 0
+            image_height = max_height * 0.80 - caption_height
+            img = build_image_flowable(data, content_width, max(image_height, max_height / 2))
             if img:
-                flow.append(img)
+                if caption and img.drawHeight <= image_height:
+                    flow.append(KeepTogether([img, caption]))
+                    caption = None
+                else:
+                    flow.append(img)
+            else:
+                flow.append(Paragraph("[이미지를 불러오지 못했습니다]", indented(styles["caption"], level)))
+            if caption:
+                flow.append(caption)
         elif btype == "table":
-            table = build_table_flowable(block, styles, max_width - level * 12)
+            table = build_table_flowable(block, styles, content_width, max_height)
             if table:
                 flow.append(table)
-                flow.append(Spacer(1, 8))
         elif btype == "child_page":
             flow.append(Paragraph(f"[하위 페이지: {esc(data.get('title', ''))}]", indented(styles["base"], level)))
         elif btype in ("column_list", "column", "synced_block"):
@@ -439,28 +568,43 @@ def blocks_to_flowables(blocks: list[dict], styles: dict, max_width: float, leve
 
         if block.get("has_children") and btype not in ("table", "child_page"):
             children = list_children(block["id"])
-            flow.extend(blocks_to_flowables(children, styles, max_width, level + 1))
+            child_level = level if btype in ("column_list", "column", "synced_block") else level + 1
+            flow.extend(blocks_to_flowables(children, styles, max_width, max_height, child_level))
     return flow
 
 
-def build_pdf(date_line: str, title_line: str, blocks: list[dict], out_path: Path) -> None:
+def draw_pdf_footer(canvas: Canvas, doc: SimpleDocTemplate) -> None:
+    canvas.saveState()
+    canvas.setFont("Korean", 7.5)
+    canvas.setFillColor(colors.HexColor("#787774"))
+    canvas.drawString(27, 30, " ".join(doc.title.split()))
+    canvas.drawRightString(doc.pagesize[0] - 27, 30, str(doc.page))
+    canvas.restoreState()
+
+
+def build_pdf(
+    date_line: str, title_line: str, blocks: list[dict], out_path: Path,
+    *, icon: dict | None = None,
+) -> None:
     register_fonts()
     styles = build_styles()
     doc = SimpleDocTemplate(
         str(out_path),
         pagesize=A4,
-        topMargin=18 * mm,
-        bottomMargin=18 * mm,
-        leftMargin=18 * mm,
-        rightMargin=18 * mm,
+        title=f"{date_line} {title_line}",
+        topMargin=66,
+        bottomMargin=66,
+        leftMargin=66,
+        rightMargin=65,
     )
-    max_width = doc.width
-    story = [
-        Paragraph(esc(date_line), styles["h1"]),
-        Paragraph(esc(title_line), styles["h1_line2"]),
-    ]
-    story.extend(blocks_to_flowables(blocks, styles, max_width))
-    doc.build(story)
+    # SimpleDocTemplate 기본 Frame의 각 변에는 6pt 패딩이 있다.
+    max_width, max_height = doc.width - 12, doc.height - 12
+    title = "<br/>".join(esc(line) for line in [date_line, *title_line.splitlines()])
+    page_icon = build_page_icon(icon) if icon else None
+    story = [page_icon] if page_icon else []
+    story.append(Paragraph(title, styles["title"]))
+    story.extend(blocks_to_flowables(blocks, styles, max_width, max_height))
+    doc.build(story, onFirstPage=draw_pdf_footer, onLaterPages=draw_pdf_footer)
 
 
 # --------------------------------------------------------------------------
@@ -570,7 +714,7 @@ def run(target_date: date, dry_run: bool) -> RunResult:
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     pdf_path = OUTPUT_DIR / attachment_name
-    build_pdf(date_line, day_label, blocks, pdf_path)
+    build_pdf(date_line, day_label, blocks, pdf_path, icon=get_page_icon(page_id))
     log.info("PDF 생성 완료: %s", pdf_path)
 
     subject = f"{date_str} {SENDER_DISPLAY_NAME} 훈련일지"
